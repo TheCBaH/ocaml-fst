@@ -1,0 +1,4 @@
+; vendor/libfst is the upstream reference checkout: the C reader and writer that generate the test
+; corpus (test/reference). It is never part of the library.
+
+(data_only_dirs vendor)

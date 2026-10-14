@@ -1,0 +1,5 @@
+x-ai-disclosure: "ai-generated"
+x-ai-provider: "Anthropic, OpenAI"
+pin-depends: [
+  ["unlz4.dev" "git+https://github.com/TheCBaH/ocaml-unlz4.git#f5446abf9a4ce4beb92b02ee958f345a6c8171bd"]
+]

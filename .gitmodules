@@ -1,0 +1,3 @@
+[submodule "vendor/libfst"]
+	path = vendor/libfst
+	url = https://github.com/gtkwave/libfst.git

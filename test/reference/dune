@@ -1,0 +1,96 @@
+; The test corpus, generated at build time: fst_ref.c, compiled against the vendor/libfst
+; submodule, writes FST files with libfst's writer and the VCD of each with libfst's reader (what
+; GTKWave's fst2vcd does). libfst picks the value change block type at compile time, so there is
+; one build per type. Needs `git submodule update --init vendor/libfst`.
+
+(rule
+ (target fst_ref_a2.exe)
+ (deps
+  (glob_files %{project_root}/vendor/libfst/src/*.h)
+  %{project_root}/vendor/libfst/src/fastlz.c)
+ (action
+  (run
+   %{cc}
+   -O1
+   -D_GNU_SOURCE
+   -D_FILE_OFFSET_BITS=64
+   -DHAVE_FSEEKO
+   -DHAVE_LIBPTHREAD
+   -DFST_WRITER_PARALLEL
+   "-DVARIANT=\"a2\""
+   -I
+   %{project_root}/vendor/libfst/src
+   -o
+   %{target}
+   %{dep:fst_ref.c}
+   %{dep:../../vendor/libfst/src/fstapi.c}
+   %{dep:../../vendor/libfst/src/lz4.c}
+   %{dep:../../vendor/libfst/src/fastlz.c}
+   -lz
+   -lpthread
+   -lm)))
+
+(rule
+ (target fst_ref_a1.exe)
+ (deps
+  (glob_files %{project_root}/vendor/libfst/src/*.h)
+  %{project_root}/vendor/libfst/src/fastlz.c)
+ (action
+  (run
+   %{cc}
+   -O1
+   -D_GNU_SOURCE
+   -D_FILE_OFFSET_BITS=64
+   -DHAVE_FSEEKO
+   -DHAVE_LIBPTHREAD
+   -DFST_WRITER_PARALLEL
+   "-DVARIANT=\"a1\""
+   -DFST_DYNAMIC_ALIAS2_DISABLE
+   -I
+   %{project_root}/vendor/libfst/src
+   -o
+   %{target}
+   %{dep:fst_ref.c}
+   %{dep:../../vendor/libfst/src/fstapi.c}
+   %{dep:../../vendor/libfst/src/lz4.c}
+   %{dep:../../vendor/libfst/src/fastlz.c}
+   -lz
+   -lpthread
+   -lm)))
+
+(rule
+ (target fst_ref_a0.exe)
+ (deps
+  (glob_files %{project_root}/vendor/libfst/src/*.h)
+  %{project_root}/vendor/libfst/src/fastlz.c)
+ (action
+  (run
+   %{cc}
+   -O1
+   -D_GNU_SOURCE
+   -D_FILE_OFFSET_BITS=64
+   -DHAVE_FSEEKO
+   -DHAVE_LIBPTHREAD
+   -DFST_WRITER_PARALLEL
+   "-DVARIANT=\"a0\""
+   -DFST_DYNAMIC_ALIAS_DISABLE
+   -I
+   %{project_root}/vendor/libfst/src
+   -o
+   %{target}
+   %{dep:fst_ref.c}
+   %{dep:../../vendor/libfst/src/fstapi.c}
+   %{dep:../../vendor/libfst/src/lz4.c}
+   %{dep:../../vendor/libfst/src/fastlz.c}
+   -lz
+   -lpthread
+   -lm)))
+
+(rule
+ (targets
+  (dir corpus))
+ (action
+  (progn
+   (run %{dep:fst_ref_a2.exe} corpus corpus)
+   (run %{dep:fst_ref_a1.exe} corpus corpus)
+   (run %{dep:fst_ref_a0.exe} corpus corpus))))

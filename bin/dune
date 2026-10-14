@@ -1,0 +1,5 @@
+(executable
+ (name fst2vcd)
+ (public_name fst2vcd)
+ (package fst)
+ (libraries fst))

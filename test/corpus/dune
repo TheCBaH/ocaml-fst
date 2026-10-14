@@ -1,0 +1,36 @@
+; Converts every file of the generated corpus (test/reference) and compares the result with the
+; VCD libfst wrote for it, and records a digest of each golden VCD, so that a change in the
+; reference itself (a libfst bump, a 32-bit build) shows up as a diff of corpus.digests.
+
+(executables
+ (names test_corpus robust digests)
+ (libraries fst))
+
+(rule
+ (alias runtest)
+ (deps %{project_root}/test/reference/corpus)
+ (action
+  (run %{exe:test_corpus.exe} %{project_root}/test/reference/corpus)))
+
+(rule
+ (alias runtest)
+ (deps
+  %{project_root}/test/reference/corpus
+  (glob_files %{project_root}/vendor/libfst/tests/data/malformed/*.fst))
+ (action
+  (run
+   %{exe:robust.exe}
+   %{project_root}/test/reference/corpus
+   %{project_root}/vendor/libfst/tests/data/malformed)))
+
+(rule
+ (deps %{project_root}/test/reference/corpus)
+ (action
+  (with-stdout-to
+   corpus.digests.gen
+   (run %{exe:digests.exe} %{project_root}/test/reference/corpus))))
+
+(rule
+ (alias runtest)
+ (action
+  (diff corpus.digests corpus.digests.gen)))

@@ -1,0 +1,4 @@
+(library
+ (name fst)
+ (public_name fst)
+ (libraries zipc unlz4))
