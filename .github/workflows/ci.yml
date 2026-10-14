@@ -1,0 +1,72 @@
+name: ci
+
+# Every leg runs inside the repository devcontainer (.devcontainer/), built by
+# TheCBaH/devcontainer-action and cached in the repository's container registry.
+#
+# Every leg checks out the vendor/libfst submodule, from which the test corpus and its golden VCD
+# files are generated at build time. The 64-bit legs ("full") also convert the output of a real
+# Verilator simulation. The 32-bit legs run the native suite, which proves 31-bit native-int
+# safety, on a corpus written by the 32-bit build of libfst.
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  matrix:
+    runs-on: ubuntu-slim
+    outputs:
+      matrix: ${{ steps.matrix.outputs.matrix }}
+    steps:
+    - name: matrix
+      id: matrix
+      run: |
+        python3 - <<'EOF2'
+        import json, os
+        matrix = []
+        for ver in ["4.14.4", "5.4.1"]:
+            matrix.append({"os": "ubuntu-24.04",     "ocaml_version": ver, "platform": "linux/amd64", "full": True})
+            matrix.append({"os": "ubuntu-24.04-arm", "ocaml_version": ver, "platform": "linux/arm64", "full": True})
+        matrix.append({"os": "ubuntu-24.04",     "ocaml_version": "4.14.4", "platform": "linux/i386",   "full": False})
+        matrix.append({"os": "ubuntu-24.04-arm", "ocaml_version": "4.14.4", "platform": "linux/arm/v7", "full": False})
+        with open(os.environ["GITHUB_OUTPUT"], "a") as f:
+            f.write("matrix<<__OUTPUT__\n%s\n__OUTPUT__\n" % json.dumps(matrix))
+        EOF2
+  ci:
+    needs: matrix
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJson(needs.matrix.outputs.matrix) }}
+    steps:
+    - name: checkout
+      uses: actions/checkout@v7
+      with:
+        submodules: true
+    - name: devcontainer
+      uses: TheCBaH/devcontainer-action/devcontainer@v1
+      id: devcontainer
+      env:
+        OCAML_VERSION: ${{ matrix.ocaml_version }}
+      with:
+        variant: ${{ matrix.ocaml_version }}
+        platform: ${{ matrix.platform }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    - name: setup
+      run: |
+        echo 'EXEC=${{ steps.devcontainer.outputs.exec }}' >> $GITHUB_ENV
+    - name: versions
+      run: |
+        ${{ env.EXEC }} sh -c 'opam exec -- ocamlfind ocamlopt -version; opam exec -- dune --version; opam list --columns=name,version dune zipc unlz4 ocamlformat 2>/dev/null; verilator --version 2>/dev/null || true'
+    - name: ci
+      run: |
+        ${{ env.EXEC }} make ci
+    - name: verilator-test
+      if: matrix.full
+      run: |
+        ${{ env.EXEC }} make verilator-test

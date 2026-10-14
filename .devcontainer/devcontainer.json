@@ -1,0 +1,34 @@
+// For format details, see https://aka.ms/devcontainer.json.
+{
+    "name": "fst devcontainer",
+    "build": {
+        "dockerfile": "Dockerfile"
+    },
+    "features": {
+        "ghcr.io/devcontainers/features/common-utils:2": {
+            "installZsh": "true",
+            "username": "vscode",
+            "userUid": "1000",
+            "userGid": "1000",
+            "upgradePackages": "false"
+        },
+        "ghcr.io/devcontainers/features/sshd:1": {},
+        "ghcr.io/thecbah/ocaml-features/ocaml:1": {
+            // CI sets OCAML_VERSION per matrix leg.
+            "version": "${localEnv:OCAML_VERSION:4.14.4}",
+            "packages": "dune#3.24.2 ocamlformat#0.28.1 zipc"
+        }
+    },
+    "customizations": {
+        "vscode": {
+            "extensions": [
+                "ocamllabs.ocaml-platform"
+            ]
+        }
+    },
+    "remoteUser": "vscode",
+    // The vendor/libfst submodule is needed by the tests (the corpus is generated from it); make
+    // deps installs the opam dependencies, pinning unlz4 through fst.opam's pin-depends.
+    "postCreateCommand": "sudo .devcontainer/fix-opam-owner.sh $(id -u) $(id -g) && git config --global --add safe.directory '*' && git submodule update --init && make deps",
+    "waitFor": "postCreateCommand"
+}
