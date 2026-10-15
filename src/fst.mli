@@ -133,6 +133,11 @@ module Private : sig
   val varint : string -> int64
   val svarint : string -> int64
 
+  val block_types : t -> int list
+  (** The hierarchy block's type, then each value change block's. *)
+
+  val packtypes : t -> (char list, Error.t) result
+
   val parse_chain :
     string -> alias2:bool -> vc_maxhandle:int -> vc_len:int -> (int array * int array) option
 end

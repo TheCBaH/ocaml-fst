@@ -213,7 +213,7 @@ static void multiblock(fstWriterContext *c)
 /* Large enough that the LZ4 writer packs the hierarchy twice (over 4 MiB). */
 static void big_hier(fstWriterContext *c)
 {
-    enum { N = 42000 };
+    enum { N = 48000 };
     static fstHandle h[N];
     char name[128];
 

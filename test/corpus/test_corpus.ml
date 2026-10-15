@@ -57,5 +57,24 @@ let () =
           end)
         [ (false, ".vcd"); (true, ".ext.vcd") ])
     (Common.files dir ".fst");
+  (* Every block type and compression must stay exercised: a corpus change that drops one
+     (the double-LZ4 hierarchy needs over 4 MiB of it) fails here. *)
+  let seen = Hashtbl.create 16 in
+  List.iter
+    (fun f ->
+      let path = Filename.concat dir f in
+      if (Common.read_file path).[0] = '\xfe' then Hashtbl.replace seen "ZWRAPPER" ();
+      match Fst.open_file path with
+      | Error _ -> ()
+      | Ok t ->
+          List.iter (fun b -> Hashtbl.replace seen (string_of_int b) ()) (Fst.Private.block_types t);
+          (match Fst.Private.packtypes t with
+          | Ok l -> List.iter (fun c -> Hashtbl.replace seen (String.make 1 c) ()) l
+          | Error _ -> ());
+          Fst.close t)
+    (Common.files dir ".fst");
+  let required = [ "1"; "5"; "8"; "4"; "6"; "7"; "ZWRAPPER"; "Z"; "F"; "4" ] in
+  let missing = List.filter (fun k -> not (Hashtbl.mem seen k)) required in
+  List.iter (Printf.printf "FAIL corpus lacks %s\n") missing;
   Printf.printf "corpus: %d conversions, %d failed\n" !checked !failed;
-  if !checked = 0 || !failed > 0 then exit 1
+  if !checked = 0 || !failed > 0 || missing <> [] then exit 1

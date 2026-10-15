@@ -199,3 +199,15 @@ let hierarchy_data t =
         let mid = Codec.lz4 ~what ~offset:off data ~off:p ~len:(16 + clen - p) ~size:uclen2 in
         Codec.lz4 ~what ~offset:off mid ~off:0 ~len:uclen2 ~size:uclen
       end
+
+(* A value change block's waves compression: ['Z'], ['F'] or ['4']. *)
+let packtype t b =
+  let what = "value change block" in
+  let data = block_data t.src b what in
+  let r = Bin_reader.create ~base:(Int64.add b.pos 1L) ~pos:32 data in
+  ignore (Bin_reader.varint r what);
+  let frame_clen = Bin_reader.varint_int r what in
+  ignore (Bin_reader.varint r what);
+  Bin_reader.skip r frame_clen what;
+  ignore (Bin_reader.varint r what);
+  Char.chr (Bin_reader.u8 r what)

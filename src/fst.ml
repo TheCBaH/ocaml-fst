@@ -128,6 +128,12 @@ module Private = struct
   let varint s = Bin_reader.varint (Bin_reader.create s) "varint"
   let svarint s = fst (Vc.svarint_str (s ^ "\000") 0)
 
+  let block_types (t : t) =
+    (match t.hier with Some b -> [ b.typ ] | None -> [])
+    @ List.map (fun (b : File.block) -> b.typ) t.vc_blocks
+
+  let packtypes (t : t) = Err.catch (fun () -> List.map (File.packtype t) t.vc_blocks)
+
   let parse_chain s ~alias2 ~vc_maxhandle ~vc_len =
     let table = Array.make (vc_maxhandle + 1) 0 and lengths = Array.make (vc_maxhandle + 1) 0 in
     match Vc.parse_chain (s ^ "\000") ~alias2 ~vc_maxhandle ~vc_len table lengths with
