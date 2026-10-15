@@ -283,7 +283,7 @@ static void tiny(fstWriterContext *c)
 struct options
 {
     enum fstWriterPackType pack;
-    int repack, parallel, timescale;
+    int repack, timescale;
     int64_t timezero;
 };
 
@@ -301,7 +301,6 @@ static int write_case(const char *dir, const char *name, void (*body)(fstWriterC
     }
     fstWriterSetPackType(c, o.pack);
     fstWriterSetRepackOnClose(c, o.repack);
-    fstWriterSetParallelMode(c, o.parallel);
     fstWriterSetTimescale(c, o.timescale);
     fstWriterSetTimezero(c, o.timezero);
     fstWriterSetDate(c, "Wed Oct 14 12:00:00 2026\n");
@@ -337,7 +336,7 @@ static int corpus(const char *dir)
         return 1;
     }
     for (unsigned i = 0; i < sizeof packs / sizeof packs[0]; i++) {
-        struct options o = {packs[i].pack, 0, 0, -9, 0};
+        struct options o = {packs[i].pack, 0, -9, 0};
 
         snprintf(name, sizeof name, "kitchen_%s", packs[i].suffix);
         rc |= write_case(dir, name, kitchen, o, 1);
@@ -345,24 +344,21 @@ static int corpus(const char *dir)
         rc |= write_case(dir, name, multiblock, o, 0);
         snprintf(name, sizeof name, "late_start_%s", packs[i].suffix);
         rc |= write_case(dir, name, late_start, o, 0);
-        o.parallel = 1;
-        snprintf(name, sizeof name, "parallel_%s", packs[i].suffix);
-        rc |= write_case(dir, name, kitchen, o, 0);
     }
     {
-        struct options o = {FST_WR_PT_ZLIB, 1, 0, -12, 0};
+        struct options o = {FST_WR_PT_ZLIB, 1, -12, 0};
         rc |= write_case(dir, "repack", kitchen, o, 1);
         o.pack = FST_WR_PT_LZ4;
         rc |= write_case(dir, "repack_4", multiblock, o, 0);
     }
     {
-        struct options o = {FST_WR_PT_ZLIB, 0, 0, -9, 0};
+        struct options o = {FST_WR_PT_ZLIB, 0, -9, 0};
         rc |= write_case(dir, "quiet", quiet, o, 0);
         o.timezero = -42;
         rc |= write_case(dir, "timezero", tiny, o, 0);
     }
     if (!strcmp(VARIANT, "a2")) {
-        struct options o = {FST_WR_PT_LZ4, 0, 0, -9, 0};
+        struct options o = {FST_WR_PT_LZ4, 0, -9, 0};
         rc |= write_case(dir, "big_hier_4", big_hier, o, 0);
         o.pack = FST_WR_PT_ZLIB;
         rc |= write_case(dir, "big_hier_z", big_hier, o, 0);

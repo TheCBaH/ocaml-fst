@@ -42,6 +42,13 @@ Where the sources disagree, `fstapi.c` decides:
 - `FST_EV_REG` and `FST_EV_TIME` enum attributes fall outside libfst's name table (it reads
   past the end); they are named `reg` and `time` here and kept out of the corpus.
 
+## Reference limits
+
+libfst's parallel writer (`fstWriterSetParallelMode`) is not used for the corpus. On arm64 CI
+runners it intermittently writes value changes that libfst's own reader rejects (`fac: 2 clen:
+120 (rc=-3)`), and on x86-64 a file that flushes and writes again at the same time made the
+reader crash. Parallel mode changes how blocks are written, not their format.
+
 ## Robustness
 
 Malformed input raises `Error.E` internally and returns `Error` at the API. Where libfst
