@@ -131,6 +131,20 @@ module Vcd : sig
       [$attrbegin]). *)
 
   val to_string : ?extensions:bool -> t -> (string, Error.t) result
+
+  (** How {!write} spells things, for consumers that build their own VCD view. *)
+
+  val id : int -> string
+  (** A handle's identifier code. *)
+
+  val timescale : int -> string
+  (** E.g. [1ns] for [-9]. *)
+
+  val var_length : var_type:int -> length:int -> int
+  (** The [$var] size of a {!Hier.Var}. *)
+
+  val escape : bytes -> int -> int -> string
+  (** A string variable's value, escaped as in an [s] record. *)
 end
 
 (**/**)

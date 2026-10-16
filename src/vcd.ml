@@ -107,6 +107,13 @@ module Growable = struct
   let to_array t = Array.sub t.a 0 t.n
 end
 
+(* The [$var] size: reals by precision, ports by their 3n+2 encoding. *)
+let var_length ~var_type ~length =
+  let len =
+    if Hier.is_real var_type then if var_type = Hier.vt_shortreal then 32 else 64 else length
+  in
+  if var_type = Hier.vt_port then (len - 2) land Vc.mask32 / 3 else len
+
 let definitions ~extensions (file : File.t) b =
   let h = file.header in
   Printf.bprintf b "$date\n\t%s\n$end\n" h.date;
@@ -147,10 +154,8 @@ let definitions ~extensions (file : File.t) b =
             Growable.push reals real;
             Growable.push ports (var_type = Hier.vt_port)
           end;
-          let len = if real then if var_type = Hier.vt_shortreal then 32 else 64 else length in
-          let len = if var_type = Hier.vt_port then (len - 2) land Vc.mask32 / 3 else len in
-          Printf.bprintf b "$var %s %d %s %s $end\n" Hier.var_type_names.(var_type) len (id handle)
-            name);
+          Printf.bprintf b "$var %s %d %s %s $end\n" Hier.var_type_names.(var_type)
+            (var_length ~var_type ~length) (id handle) name);
   Buffer.add_string b "$enddefinitions $end\n";
   ({ Vc.lens = Growable.to_array lens; reals = Growable.to_array reals }, Growable.to_array ports)
 

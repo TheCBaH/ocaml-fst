@@ -112,6 +112,15 @@ module Vcd = struct
         let b = Buffer.create 131072 in
         V.write ~extensions t b ~flush:ignore;
         Buffer.contents b)
+
+  let id = V.id
+  let timescale = V.timescale
+  let var_length = V.var_length
+
+  let escape s off len =
+    let b = Buffer.create (len + 8) in
+    V.add_escaped b s off len;
+    Buffer.contents b
 end
 
 module Private = struct
