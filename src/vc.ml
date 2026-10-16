@@ -400,7 +400,16 @@ let block ~(file : File.t) ~signals ~sink st ~secnum (b : File.block) =
     done
   done
 
-let iter ~(file : File.t) ~signals ~sink =
+type reader = {
+  file : File.t;
+  signals : signals;
+  sink : sink;
+  st : state;
+  mutable secnum : int;
+  mutable blocks : File.block list;
+}
+
+let start ~(file : File.t) ~signals ~sink =
   let maxhandle = Array.length signals.lens in
   let st =
     {
@@ -414,16 +423,30 @@ let iter ~(file : File.t) ~signals ~sink =
       scratch = Bytes.create 64;
     }
   in
-  let rec go secnum = function
-    | [] -> ()
-    | b :: rest when secnum < file.vc_section_count ->
-        let continue_ =
-          match block ~file ~signals ~sink st ~secnum b with
-          | () -> true
-          | exception Skip_block -> true
-          | exception Exit -> false
-        in
-        if continue_ then go (secnum + 1) rest
-    | _ -> ()
-  in
-  go 0 file.vc_blocks
+  { file; signals; sink; st; secnum = 0; blocks = file.vc_blocks }
+
+(* The pending blocks are dropped while one is decoded, so that an exception, ours or the
+   sink's, ends the iteration. *)
+let step r =
+  match r.blocks with
+  | b :: rest when r.secnum < r.file.vc_section_count ->
+      let secnum = r.secnum in
+      r.blocks <- [];
+      let continue_ =
+        match block ~file:r.file ~signals:r.signals ~sink:r.sink r.st ~secnum b with
+        | () -> true
+        | exception Skip_block -> true
+        | exception Exit -> false
+      in
+      if continue_ then begin
+        r.blocks <- rest;
+        r.secnum <- secnum + 1
+      end;
+      true
+  | _ -> false
+
+let iter ~file ~signals ~sink =
+  let r = start ~file ~signals ~sink in
+  while step r do
+    ()
+  done

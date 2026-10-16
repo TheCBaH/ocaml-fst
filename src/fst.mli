@@ -112,6 +112,18 @@ type sink = {
 
 val iter_changes : t -> sink -> (unit, Error.t) result
 
+type reader
+(** The value changes of a file, read one value change block at a time, so that only that
+    block is decompressed in memory. *)
+
+val reader : t -> sink -> (reader, Error.t) result
+(** Reads the hierarchy; no value change block yet. *)
+
+val step : reader -> (bool, Error.t) result
+(** Passes the changes of the next value change block to the sink, which is only called
+    from [step]. [Ok false] when no block remains. After an error, or an exception raised by
+    the sink, no block remains. Together, the steps make the same calls as {!iter_changes}. *)
+
 (** VCD output. *)
 module Vcd : sig
   val write : ?extensions:bool -> t -> out_channel -> (unit, Error.t) result

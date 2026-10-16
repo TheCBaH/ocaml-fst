@@ -15,7 +15,20 @@ let convert name s =
     | Error _ -> ()
     | Ok t ->
         ignore (Fst.Vcd.to_string t);
-        ignore (Fst.Vcd.to_string ~extensions:true t)
+        ignore (Fst.Vcd.to_string ~extensions:true t);
+        let nop2 _ _ = () and nop4 _ _ _ _ = () in
+        let sink =
+          {
+            Fst.time = ignore;
+            frame = ignore;
+            bit = nop2;
+            vector = nop4;
+            real = nop2;
+            varlen = nop4;
+          }
+        in
+        let rec go r = match Fst.step r with Ok true -> go r | Ok false | Error _ -> () in
+        Result.iter go (Fst.reader t sink)
   with e ->
     let bt = Printexc.get_backtrace () in
     incr failures;

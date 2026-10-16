@@ -95,6 +95,11 @@ let signals t =
 
 let iter_changes t sink = Err.catch (fun () -> Vc.iter ~file:t ~signals:(signals t) ~sink)
 
+type reader = Vc.reader
+
+let reader t sink = Err.catch (fun () -> Vc.start ~file:t ~signals:(signals t) ~sink)
+let step r = Err.catch (fun () -> Vc.step r)
+
 module Vcd = struct
   let write ?(extensions = false) t oc =
     Err.catch (fun () ->

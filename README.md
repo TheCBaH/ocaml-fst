@@ -32,7 +32,8 @@ match Fst.open_file "trace.fst" with
 ```
 
 `Fst.fold_hierarchy` walks scopes and variables, and `Fst.iter_changes` streams value changes
-in time order to a callback record.
+in time order to a callback record. `Fst.reader` and `Fst.step` make the same calls one value
+change block at a time, for consumers that pull.
 
 ## Development
 

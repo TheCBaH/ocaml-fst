@@ -22,6 +22,49 @@ let line_at s i =
   in
   String.sub s start (stop - start)
 
+(* Every call the sink receives, and whether it came from inside [Fst.step]. *)
+let recording_sink b ~stepping =
+  let add fmt =
+    Printf.ksprintf
+      (fun s ->
+        if not !stepping then Buffer.add_string b "OUTSIDE ";
+        Buffer.add_string b s)
+      fmt
+  in
+  {
+    Fst.time = (fun t -> add "#%Lu\n" t);
+    frame = (fun t -> add "frame %Lu\n" t);
+    bit = (fun h c -> add "%c %d\n" c h);
+    vector = (fun h s off len -> add "b%s %d\n" (Bytes.sub_string s off len) h);
+    real = (fun h d -> add "r%Lx %d\n" (Int64.bits_of_float d) h);
+    varlen = (fun h s off len -> add "s%S %d\n" (Bytes.sub_string s off len) h);
+  }
+
+(* Stepping must make the calls and have the outcome of [iter_changes]; returns the number of
+   steps. *)
+let check_steps t =
+  let all = Buffer.create 4096 and stepped = Buffer.create 4096 and stepping = ref true in
+  let expected = Fst.iter_changes t (recording_sink all ~stepping) in
+  let rec go n r =
+    stepping := true;
+    let s = Fst.step r in
+    stepping := false;
+    match s with
+    | Ok true -> go (n + 1) r
+    | Ok false -> (Ok (), n, Fst.step r = Ok false)
+    | Error e -> (Error e, n, Fst.step r = Ok false)
+  in
+  stepping := false;
+  let actual, n, ended =
+    match Fst.reader t (recording_sink stepped ~stepping) with
+    | Ok r -> go 0 r
+    | Error e -> (Error e, 0, true)
+  in
+  if actual <> expected then Error "outcome differs from iter_changes"
+  else if not ended then Error "a step after the last one"
+  else if Buffer.contents all <> Buffer.contents stepped then Error "calls differ from iter_changes"
+  else Ok n
+
 let () =
   let dir = Sys.argv.(1) in
   let checked = ref 0 and failed = ref 0 in
@@ -73,7 +116,21 @@ let () =
           | Error _ -> ());
           Fst.close t)
     (Common.files dir ".fst");
-  let required = [ "1"; "5"; "8"; "4"; "6"; "7"; "ZWRAPPER"; "Z"; "F"; "4" ] in
+  let multi_step = ref false in
+  List.iter
+    (fun f ->
+      match Fst.open_file (Filename.concat dir f) with
+      | Error _ -> ()
+      | Ok t ->
+          (match check_steps t with
+          | Ok n -> if n > 1 then multi_step := true
+          | Error e ->
+              incr failed;
+              Printf.printf "FAIL %s: %s\n" f e);
+          Fst.close t)
+    (Common.files dir ".fst");
+  if !multi_step then Hashtbl.replace seen "multi-step" ();
+  let required = [ "1"; "5"; "8"; "4"; "6"; "7"; "ZWRAPPER"; "Z"; "F"; "4"; "multi-step" ] in
   let missing = List.filter (fun k -> not (Hashtbl.mem seen k)) required in
   List.iter (Printf.printf "FAIL corpus lacks %s\n") missing;
   Printf.printf "corpus: %d conversions, %d failed\n" !checked !failed;
