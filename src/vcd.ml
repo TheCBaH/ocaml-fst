@@ -222,5 +222,5 @@ let write ~extensions file b ~flush =
           tail h);
     }
   in
-  Vc.iter ~file ~signals ~sink;
+  Vc.iter ~file ~signals ~sink ();
   flush b

@@ -65,6 +65,73 @@ let check_steps t =
   else if Buffer.contents all <> Buffer.contents stepped then Error "calls differ from iter_changes"
   else Ok n
 
+(* The calls, each with its handle; 0 for [time] and [frame]. *)
+let tagged_sink calls =
+  let add h fmt = Printf.ksprintf (fun s -> calls := (h, s) :: !calls) fmt in
+  {
+    Fst.time = (fun t -> add 0 "#%Lu" t);
+    frame = (fun t -> add 0 "frame %Lu" t);
+    bit = (fun h c -> add h "%c %d" c h);
+    vector = (fun h s off len -> add h "b%s %d" (Bytes.sub_string s off len) h);
+    real = (fun h d -> add h "r%Lx %d" (Int64.bits_of_float d) h);
+    varlen = (fun h s off len -> add h "s%S %d" (Bytes.sub_string s off len) h);
+  }
+
+let calls ?select t =
+  let c = ref [] in
+  let r = Fst.iter_changes ?select t (tagged_sink c) in
+  (r, List.rev !c)
+
+let masks n =
+  let random seed =
+    let st = Random.State.make [| seed |] in
+    let a = Array.init n (fun _ -> Random.State.bool st) in
+    fun h -> a.(h - 1)
+  in
+  [
+    ("all", fun _ -> true);
+    ("none", fun _ -> false);
+    ("first", fun h -> h = 1);
+    ("last", fun h -> h = n);
+    ("odd", fun h -> h land 1 = 1);
+  ]
+  @ List.map (fun s -> (Printf.sprintf "random %d" s, random s)) [ 1; 2; 3 ]
+  @
+  (* One handle at a time also selects every dynamic alias without its target. *)
+  if n <= 64 then List.init n (fun i -> (Printf.sprintf "only %d" (i + 1), fun h -> h = i + 1))
+  else []
+
+(* With [select], the calls are those without it minus the unselected handles' ones; stepping
+   makes the same calls, and the first step, not [reader], calls [select] once per handle. *)
+let check_select t ~full (name, select) =
+  let n = Int64.to_int (Fst.header t).max_handle in
+  let expected = (fst full, List.filter (fun (h, _) -> h = 0 || select h) (snd full)) in
+  let asked = Hashtbl.create 64 in
+  let counted h =
+    Hashtbl.replace asked h (1 + Option.value (Hashtbl.find_opt asked h) ~default:0);
+    select h
+  in
+  let stepped = ref [] in
+  let outcome, before =
+    match Fst.reader ~select:counted t (tagged_sink stepped) with
+    | Error e -> (Error e, 0)
+    | Ok r ->
+        let before = Hashtbl.length asked in
+        let rec go () =
+          match Fst.step r with Ok true -> go () | Ok false -> Ok () | Error e -> Error e
+        in
+        (go (), before)
+  in
+  if calls ~select t <> expected then Error (name ^ ": not the unselected calls, filtered")
+  else if (outcome, List.rev !stepped) <> expected then Error (name ^ ": stepping differs")
+  else if before <> 0 then Error (name ^ ": select called before the first step")
+  else if Hashtbl.length asked <> n || not (Hashtbl.fold (fun _ k ok -> ok && k = 1) asked true)
+  then
+    Error
+      (Printf.sprintf "%s: select called for %d of %d handles, or more than once" name
+         (Hashtbl.length asked) n)
+  else Ok ()
+
 let () =
   let dir = Sys.argv.(1) in
   let checked = ref 0 and failed = ref 0 in
@@ -130,6 +197,22 @@ let () =
           Fst.close t)
     (Common.files dir ".fst");
   if !multi_step then Hashtbl.replace seen "multi-step" ();
+  List.iter
+    (fun f ->
+      match Fst.open_file (Filename.concat dir f) with
+      | Error _ -> ()
+      | Ok t ->
+          let full = calls t in
+          List.iter
+            (fun m ->
+              match check_select t ~full m with
+              | Ok () -> ()
+              | Error e ->
+                  incr failed;
+                  Printf.printf "FAIL %s: %s\n" f e)
+            (masks (Int64.to_int (Fst.header t).max_handle));
+          Fst.close t)
+    (Common.files dir ".fst");
   let required = [ "1"; "5"; "8"; "4"; "6"; "7"; "ZWRAPPER"; "Z"; "F"; "4"; "multi-step" ] in
   let missing = List.filter (fun k -> not (Hashtbl.mem seen k)) required in
   List.iter (Printf.printf "FAIL corpus lacks %s\n") missing;

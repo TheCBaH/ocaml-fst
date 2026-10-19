@@ -174,7 +174,8 @@ let scratch st n =
     st.scratch <- Bytes.create (max n (2 * Bytes.length st.scratch));
   st.scratch
 
-let block ~(file : File.t) ~signals ~sink st ~secnum (b : File.block) =
+let block ~(file : File.t) ~signals ~mask ~sink st ~secnum (b : File.block) =
+  let selected i = match mask with None -> true | Some m -> Array.unsafe_get m i in
   let little_endian = file.header.little_endian in
   let maxhandle = Array.length signals.lens in
   let data = File.block_data file.src b "value change block" in
@@ -236,13 +237,14 @@ let block ~(file : File.t) ~signals ~sink st ~secnum (b : File.block) =
       if l <= 1 then begin
         if l = 1 then begin
           if !offs >= frame_uclen then Error.fail Malformed (at fpos) "frame: too short";
-          sink.bit (idx + 1) mu.[!offs]
+          if selected idx then sink.bit (idx + 1) mu.[!offs]
         end
       end
       else begin
         if !offs + l > frame_uclen then Error.fail Malformed (at fpos) "frame: too short";
-        if not signals.reals.(idx) then sink.vector (idx + 1) mub !offs l
-        else sink.real (idx + 1) (Header.float_at ~little_endian mu !offs)
+        if selected idx then
+          if not signals.reals.(idx) then sink.vector (idx + 1) mub !offs l
+          else sink.real (idx + 1) (Header.float_at ~little_endian mu !offs)
       end;
       offs := !offs + l
     done
@@ -278,7 +280,9 @@ let block ~(file : File.t) ~signals ~sink st ~secnum (b : File.block) =
       Sys.max_string_length
     else Int64.to_int mem_required + 66
   in
-  let toffs = ref 0 in
+  (* [need] is what the traversal buffer would hold without selection, so that the checks
+     against [mem_limit], and thus which blocks are skipped, do not depend on it. *)
+  let toffs = ref 0 and need = ref 0 in
   for i = 0 to idx - 1 do
     let ct = st.table.(i) in
     if ct <> 0 then begin
@@ -291,32 +295,35 @@ let block ~(file : File.t) ~signals ~sink st ~secnum (b : File.block) =
       let dpos = vr.pos in
       let dest, clen = if v <> 0 then (v, cl - skip) else (cl - skip, cl - skip) in
       if v = 0 && cl <= skip then raise Skip_block;
-      if !toffs + dest > mem_limit then raise Skip_block;
+      if !need + dest > mem_limit then raise Skip_block;
+      need := !need + dest;
       if clen < 0 || dpos + clen > len then
         Error.fail Truncated (at dpos) "%s: handle %d" what (i + 1);
-      reserve st (!toffs + dest);
-      let w = "value changes" and offset = at dpos in
-      if v = 0 then Bytes.blit_string data dpos st.trav !toffs dest
-      else begin
-        match packtype with
-        | '4' ->
-            Codec.lz4_into ~what:w ~offset data ~off:dpos ~len:clen st.trav ~dst_off:!toffs
-              ~size:dest
-        | 'F' ->
-            Codec.fastlz_into ~what:w ~offset data ~off:dpos ~len:clen st.trav ~dst_off:!toffs
-              ~size:dest
-        | _ ->
-            let d = Codec.zlib ~what:w ~offset data ~off:dpos ~len:clen ~size:dest in
-            Bytes.blit_string d 0 st.trav !toffs dest
-      end;
-      st.headptr.(i) <- !toffs;
-      st.remaining.(i) <- dest;
-      toffs := !toffs + dest;
-      let vli, _ = varint_at st.trav st.headptr.(i) (Bytes.length st.trav) w offset in
-      let tdelta = if signals.lens.(i) = 1 then vli lsr 2 lsl (vli land 1) else vli lsr 1 in
-      if tdelta >= tc_items then Error.fail Malformed offset "%s: time index %d" w tdelta;
-      st.scatter.(i) <- tc_head.(tdelta);
-      tc_head.(tdelta) <- i + 1
+      if selected i then begin
+        reserve st (!toffs + dest);
+        let w = "value changes" and offset = at dpos in
+        if v = 0 then Bytes.blit_string data dpos st.trav !toffs dest
+        else begin
+          match packtype with
+          | '4' ->
+              Codec.lz4_into ~what:w ~offset data ~off:dpos ~len:clen st.trav ~dst_off:!toffs
+                ~size:dest
+          | 'F' ->
+              Codec.fastlz_into ~what:w ~offset data ~off:dpos ~len:clen st.trav ~dst_off:!toffs
+                ~size:dest
+          | _ ->
+              let d = Codec.zlib ~what:w ~offset data ~off:dpos ~len:clen ~size:dest in
+              Bytes.blit_string d 0 st.trav !toffs dest
+        end;
+        st.headptr.(i) <- !toffs;
+        st.remaining.(i) <- dest;
+        toffs := !toffs + dest;
+        let vli, _ = varint_at st.trav st.headptr.(i) (Bytes.length st.trav) w offset in
+        let tdelta = if signals.lens.(i) = 1 then vli lsr 2 lsl (vli land 1) else vli lsr 1 in
+        if tdelta >= tc_items then Error.fail Malformed offset "%s: time index %d" w tdelta;
+        st.scatter.(i) <- tc_head.(tdelta);
+        tc_head.(tdelta) <- i + 1
+      end
     end
   done;
   let trav = st.trav in
@@ -405,11 +412,13 @@ type reader = {
   signals : signals;
   sink : sink;
   st : state;
+  mutable select : (int -> bool) option;  (** Until the first step builds [mask] from it. *)
+  mutable mask : bool array option;
   mutable secnum : int;
   mutable blocks : File.block list;
 }
 
-let start ~(file : File.t) ~signals ~sink =
+let start ?select ~(file : File.t) ~signals ~sink () =
   let maxhandle = Array.length signals.lens in
   let st =
     {
@@ -423,17 +432,22 @@ let start ~(file : File.t) ~signals ~sink =
       scratch = Bytes.create 64;
     }
   in
-  { file; signals; sink; st; secnum = 0; blocks = file.vc_blocks }
+  { file; signals; sink; st; select; mask = None; secnum = 0; blocks = file.vc_blocks }
 
 (* The pending blocks are dropped while one is decoded, so that an exception, ours or the
    sink's, ends the iteration. *)
 let step r =
+  (match r.select with
+  | Some f ->
+      r.mask <- Some (Array.init (Array.length r.signals.lens) (fun i -> f (i + 1)));
+      r.select <- None
+  | None -> ());
   match r.blocks with
   | b :: rest when r.secnum < r.file.vc_section_count ->
       let secnum = r.secnum in
       r.blocks <- [];
       let continue_ =
-        match block ~file:r.file ~signals:r.signals ~sink:r.sink r.st ~secnum b with
+        match block ~file:r.file ~signals:r.signals ~mask:r.mask ~sink:r.sink r.st ~secnum b with
         | () -> true
         | exception Skip_block -> true
         | exception Exit -> false
@@ -445,8 +459,8 @@ let step r =
       true
   | _ -> false
 
-let iter ~file ~signals ~sink =
-  let r = start ~file ~signals ~sink in
+let iter ?select ~file ~signals ~sink () =
+  let r = start ?select ~file ~signals ~sink () in
   while step r do
     ()
   done
