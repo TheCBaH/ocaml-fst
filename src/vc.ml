@@ -174,7 +174,7 @@ let scratch st n =
     st.scratch <- Bytes.create (max n (2 * Bytes.length st.scratch));
   st.scratch
 
-let block ~(file : File.t) ~signals ~mask ~packed ~sink st ~secnum (b : File.block) =
+let block ~(file : File.t) ~signals ~mask ~packed ~recovered ~sink st ~secnum (b : File.block) =
   let selected i = match mask with None -> true | Some m -> Array.unsafe_get m i in
   let little_endian = file.header.little_endian in
   let maxhandle = Array.length signals.lens in
@@ -221,7 +221,8 @@ let block ~(file : File.t) ~signals ~mask ~packed ~sink st ~secnum (b : File.blo
   let frame_maxhandle = Bin_reader.varint_int r what in
   let fpos = r.pos in
   if frame_clen > len - fpos then Error.fail Truncated (at fpos) "frame";
-  if secnum = 0 && (nitems = 0 || not (Int64.equal beg_tim time_table.(0))) then begin
+  if recovered <> None || (secnum = 0 && (nitems = 0 || not (Int64.equal beg_tim time_table.(0))))
+  then begin
     sink.frame beg_tim;
     let mu =
       if frame_uclen = frame_clen then String.sub data fpos frame_uclen
@@ -247,7 +248,10 @@ let block ~(file : File.t) ~signals ~mask ~packed ~sink st ~secnum (b : File.blo
           else sink.real (idx + 1) (Header.float_at ~little_endian mu !offs)
       end;
       offs := !offs + l
-    done
+    done;
+    List.iter
+      (fun (h, v) -> sink.varlen h (Bytes.unsafe_of_string v) 0 (String.length v))
+      (Option.value recovered ~default:[])
   end;
   r.pos <- fpos + frame_clen;
   let vc_maxhandle = Bin_reader.varint_int r what in
@@ -420,6 +424,10 @@ type reader = {
   mutable mask : bool array option;
   mutable secnum : int;
   mutable blocks : File.block list;
+  mutable prepass : int;  (** Earlier blocks whose strings the first step recovers. *)
+  mutable recovered : (int * string) list option;
+      (** Set by {!start_at}: the first block's frame is then always emitted, followed by these
+          strings. *)
 }
 
 let start ?select ?packed ~(file : File.t) ~signals ~sink () =
@@ -436,35 +444,121 @@ let start ?select ?packed ~(file : File.t) ~signals ~sink () =
       scratch = Bytes.create 64;
     }
   in
-  { file; signals; sink; packed; st; select; mask = None; secnum = 0; blocks = file.vc_blocks }
+  {
+    file;
+    signals;
+    sink;
+    packed;
+    st;
+    select;
+    mask = None;
+    secnum = 0;
+    blocks = file.vc_blocks;
+    prepass = 0;
+    recovered = None;
+  }
 
 (* The pending blocks are dropped while one is decoded, so that an exception, ours or the
    sink's, ends the iteration. *)
-let step r =
+let rec step r =
   (match r.select with
   | Some f ->
       r.mask <- Some (Array.init (Array.length r.signals.lens) (fun i -> f (i + 1)));
       r.select <- None
   | None -> ());
+  if r.prepass > 0 then begin
+    let k = r.prepass in
+    r.prepass <- 0;
+    r.recovered <- Some (strings_before r k)
+  end;
   match r.blocks with
   | b :: rest when r.secnum < r.file.vc_section_count ->
       let secnum = r.secnum in
       r.blocks <- [];
       let continue_ =
         match
-          block ~file:r.file ~signals:r.signals ~mask:r.mask ~packed:r.packed ~sink:r.sink r.st
-            ~secnum b
+          block ~file:r.file ~signals:r.signals ~mask:r.mask ~packed:r.packed ~recovered:r.recovered
+            ~sink:r.sink r.st ~secnum b
         with
         | () -> true
         | exception Skip_block -> true
         | exception Exit -> false
       in
       if continue_ then begin
+        r.recovered <- None;
         r.blocks <- rest;
         r.secnum <- secnum + 1
       end;
       true
   | _ -> false
+
+(* The last value of each selected string variable in the first [k] blocks: a block's frame does
+   not carry them. Only those handles' chains are read. *)
+and strings_before r k =
+  let lens = r.signals.lens in
+  let want i = lens.(i) = 0 && match r.mask with None -> true | Some m -> m.(i) in
+  let any = ref false in
+  Array.iteri (fun i _ -> if want i then any := true) lens;
+  if not !any then []
+  else begin
+    let last = Hashtbl.create 16 in
+    let sink =
+      {
+        time = ignore;
+        frame = ignore;
+        bit = (fun _ _ -> ());
+        vector = (fun _ _ _ _ -> ());
+        real = (fun _ _ -> ());
+        varlen = (fun h b off len -> Hashtbl.replace last h (Bytes.sub_string b off len));
+      }
+    in
+    let p = start ~select:(fun h -> want (h - 1)) ~file:r.file ~signals:r.signals ~sink () in
+    p.blocks <- List.filteri (fun i _ -> i < k) p.blocks;
+    while step p do
+      ()
+    done;
+    List.sort compare (Hashtbl.fold (fun h v acc -> (h, v) :: acc) last [])
+  end
+
+(* Whether the first and the last time step of a block have changes, decoding every handle. *)
+let activity ~file ~signals b =
+  let times = ref 0 and first = ref false and last = ref false in
+  let change () =
+    if !times > 0 then begin
+      if !times = 1 then first := true;
+      last := true
+    end
+  in
+  let sink =
+    {
+      time =
+        (fun _ ->
+          incr times;
+          last := false);
+      frame = ignore;
+      bit = (fun _ _ -> change ());
+      vector = (fun _ _ _ _ -> change ());
+      real = (fun _ _ -> change ());
+      varlen = (fun _ _ _ _ -> change ());
+    }
+  in
+  let p = start ~file ~signals ~sink () in
+  p.blocks <- [ b ];
+  while step p do
+    ()
+  done;
+  (!first, !last)
+
+(* Starts at block [block] (0-based, within [file.vc_blocks]). *)
+let start_at ?select ?packed ~file ~signals ~sink ~block () =
+  let r = start ?select ?packed ~file ~signals ~sink () in
+  if block > 0 then begin
+    r.blocks <- List.filteri (fun i _ -> i >= block) r.blocks;
+    r.secnum <- block;
+    r.prepass <- block;
+    r.recovered <- Some []
+  end;
+  r
 
 let iter ?select ?packed ~file ~signals ~sink () =
   let r = start ?select ?packed ~file ~signals ~sink () in

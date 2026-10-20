@@ -1,3 +1,4 @@
+2adc2c0931a3fd7faf855b5f83a114e9 a0_clean_z.vcd
 4f74fe7fc94d56052146951f56c39b0f a0_kitchen_4.ext.vcd
 dabf5f2006494e93c7b6a83dd5220fe2 a0_kitchen_4.vcd
 4f74fe7fc94d56052146951f56c39b0f a0_kitchen_f.ext.vcd
@@ -15,6 +16,7 @@ fea4ff7488789c2f02fb4024f4c2806e a0_multiblock_z.vcd
 6916d8d2a86a9db5fd212b9bf9c190c0 a0_repack.vcd
 447cc29c14349fcef939476e3e0172b7 a0_repack_4.vcd
 bf6f41c85875c5fcaec80654dfc56c67 a0_timezero.vcd
+07c0c81478428e573704171c1c17fb74 a1_clean_z.vcd
 9f3f338983d24124a5335263d35c6bf4 a1_kitchen_4.ext.vcd
 a39f1f6920ea0f8cdce8cd213d16b0d2 a1_kitchen_4.vcd
 9f3f338983d24124a5335263d35c6bf4 a1_kitchen_f.ext.vcd
@@ -34,6 +36,7 @@ c4af45578964caf842fbb2781babf44b a1_multiblock_z.vcd
 e5ed22f4736f1f95fa7597888cbe225e a1_timezero.vcd
 15a970c0acb1c670b0c45dacecbe41e2 a2_big_hier_4.vcd
 15a970c0acb1c670b0c45dacecbe41e2 a2_big_hier_z.vcd
+edd25560bed27c3e3567cc4144d0a37e a2_clean_z.vcd
 bc29b66219379ad82cb57983ca5cbd54 a2_kitchen_4.ext.vcd
 2cc9ede3b5a2080f39c3cc7d8c291f09 a2_kitchen_4.vcd
 bc29b66219379ad82cb57983ca5cbd54 a2_kitchen_f.ext.vcd

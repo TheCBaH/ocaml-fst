@@ -103,6 +103,73 @@ let reader ?select ?packed t sink =
 
 let step r = Err.catch (fun () -> Vc.step r)
 
+type block = { start_time : int64; end_time : int64; pos : int }
+
+let blocks (t : t) =
+  Err.catch (fun () ->
+      Array.of_list
+        (List.map
+           (fun (b : File.block) ->
+             let start_time, end_time = File.block_times t.src b in
+             { start_time; end_time; pos = Int64.to_int b.pos })
+           t.vc_blocks))
+
+let check_block (t : t) k =
+  if k < 0 || k >= List.length t.vc_blocks then
+    Err.fail Err.Malformed (-1L) "block %d: the file has %d" k (List.length t.vc_blocks)
+
+let reader_at ?select ?packed t sink ~block =
+  Err.catch (fun () ->
+      check_block t block;
+      Vc.start_at ?select ?packed ~file:t ~signals:(signals t) ~sink ~block ())
+
+let aligned_block (t : t) k =
+  Err.catch (fun () ->
+      check_block t k;
+      let bs = Array.of_list t.vc_blocks in
+      let ends = Array.make (Array.length bs) None in
+      let ends_of j =
+        match ends.(j) with
+        | Some e -> e
+        | None ->
+            let e = File.block_time_ends t.src bs.(j) in
+            ends.(j) <- Some e;
+            e
+      in
+      let signals = signals t in
+      let activity = Array.make (Array.length bs) None in
+      let activity_of j =
+        match activity.(j) with
+        | Some a -> a
+        | None ->
+            let a = Vc.activity ~file:t ~signals bs.(j) in
+            activity.(j) <- Some a;
+            a
+      in
+      (* Whether the time step that block [j] starts with has changes in it and in an earlier block. The
+         time tables settle most cases; a block's table may start at the time the one before ended without
+         any change there, so the two are decoded only when they agree. *)
+      let rec before i time =
+        i >= 0
+        &&
+        match ends_of i with
+        | None -> before (i - 1) time
+        | Some (first, last) ->
+            Int64.equal last time
+            && (snd (activity_of i) || (Int64.equal first time && before (i - 1) time))
+      in
+      let rec previous i =
+        if i < 0 then None else match ends_of i with None -> previous (i - 1) | e -> e
+      in
+      let spans j =
+        match (ends_of j, previous (j - 1)) with
+        | Some (first, _), Some (_, last) when Int64.equal last first ->
+            fst (activity_of j) && before (j - 1) first
+        | _ -> false
+      in
+      let rec back j = if j > 0 && spans j then back (j - 1) else j in
+      back k)
+
 module Vcd = struct
   let write ?(extensions = false) t oc =
     Err.catch (fun () ->
@@ -132,6 +199,9 @@ module Private = struct
     match Fastlz.decompress_into s ~off:0 ~len:(String.length s) dst ~dst_off:0 ~dst_len:size with
     | Some n -> Some (Bytes.sub_string dst 0 n)
     | None -> None
+
+  let of_reader ~length ~read =
+    Err.catch (fun () -> File.scan { File.length; read; close = ignore })
 
   let vcd_id = V.id
   let timescale = V.timescale

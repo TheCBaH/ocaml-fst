@@ -145,6 +145,38 @@ val step : reader -> (bool, Error.t) result
     from [step]. [Ok false] when no block remains. After an error, or an exception raised by
     the sink, no block remains. Together, the steps make the same calls as {!iter_changes}. *)
 
+type block = { start_time : int64; end_time : int64; pos : int }
+(** A value change block: the times in its header and its file offset. *)
+
+val blocks : t -> (block array, Error.t) result
+(** The value change blocks {!iter_changes} reads, in order. Only each block's first 16 bytes
+    after its length are read: no frame, chain or time table is decoded. (A gzip-wrapped file is
+    inflated whole when it is opened.) *)
+
+val reader_at :
+  ?select:(int -> bool) ->
+  ?packed:(int -> bytes -> int -> int -> unit) ->
+  t ->
+  sink ->
+  block:int ->
+  (reader, Error.t) result
+(** A {!reader} that starts at the [block]th of {!blocks} (0-based; an error if there is none).
+    [select] and [packed] are as in {!reader}.
+
+    [block = 0] is {!reader}. For a later block, the first step first passes a frame: [frame]
+    with the block's start time and every selected handle's value after all changes of the
+    earlier blocks and before any of this block's, including the selected string variables'
+    (found by reading only those handles' chains in the earlier blocks), then the block's
+    changes. [time] is called for the block's first time even when the previous block ended on
+    it, so a timestamp that spans the boundary is seen in two parts: use {!aligned_block} to
+    start where none does. *)
+
+val aligned_block : t -> int -> (int, Error.t) result
+(** [aligned_block t k] is the largest [j <= k] such that no time step has changes both in block
+    [j] and in an earlier block (0 if there is none): a reader at [j] then sees whole time steps.
+    The blocks' time tables decide it, except where a block's first time is the one an earlier
+    block ended on: those blocks are then decoded to see whether both have changes there. *)
+
 (** VCD output. *)
 module Vcd : sig
   val write : ?extensions:bool -> t -> out_channel -> (unit, Error.t) result
@@ -173,6 +205,10 @@ end
 (* Internals for the tests. *)
 module Private : sig
   val fastlz : string -> size:int -> string option
+
+  val of_reader : length:int64 -> read:(int64 -> int -> string) -> (t, Error.t) result
+  (** A file over [read pos len], which returns [len] bytes or fewer at the end. *)
+
   val vcd_id : int -> string
   val timescale : int -> string
   val g16 : float -> string
