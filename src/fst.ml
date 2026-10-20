@@ -136,14 +136,38 @@ let aligned_block (t : t) k =
             ends.(j) <- Some e;
             e
       in
-      (* A block without changes cannot rule out a timestamp spanning it, so it steps back too. *)
-      let rec back j =
-        if j = 0 then 0
-        else
-          match (ends_of (j - 1), ends_of j) with
-          | Some (_, last), Some (first, _) when not (Int64.equal last first) -> j
-          | _ -> back (j - 1)
+      let signals = signals t in
+      let activity = Array.make (Array.length bs) None in
+      let activity_of j =
+        match activity.(j) with
+        | Some a -> a
+        | None ->
+            let a = Vc.activity ~file:t ~signals bs.(j) in
+            activity.(j) <- Some a;
+            a
       in
+      (* Whether the time step that block [j] starts with has changes in it and in an earlier block. The
+         time tables settle most cases; a block's table may start at the time the one before ended without
+         any change there, so the two are decoded only when they agree. *)
+      let rec before i time =
+        i >= 0
+        &&
+        match ends_of i with
+        | None -> before (i - 1) time
+        | Some (first, last) ->
+            Int64.equal last time
+            && (snd (activity_of i) || (Int64.equal first time && before (i - 1) time))
+      in
+      let rec previous i =
+        if i < 0 then None else match ends_of i with None -> previous (i - 1) | e -> e
+      in
+      let spans j =
+        match (ends_of j, previous (j - 1)) with
+        | Some (first, _), Some (_, last) when Int64.equal last first ->
+            fst (activity_of j) && before (j - 1) first
+        | _ -> false
+      in
+      let rec back j = if j > 0 && spans j then back (j - 1) else j in
       back k)
 
 module Vcd = struct

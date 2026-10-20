@@ -210,6 +210,38 @@ static void multiblock(fstWriterContext *c)
     }
 }
 
+/* Many small blocks that each start at a new time, a string and a real that change rarely (so
+   some blocks start with them unchanged since an earlier block), and variables that never
+   change. */
+static void clean_blocks(fstWriterContext *c)
+{
+    static const unsigned char text[] = "first\0second string\0third";
+    char buf[40];
+    fstHandle a, v, s, r;
+
+    fstWriterSetScope(c, FST_ST_VCD_MODULE, "cb", NULL);
+    a = fstWriterCreateVar(c, FST_VT_VCD_WIRE, FST_VD_IMPLICIT, 1, "a", 0);
+    v = fstWriterCreateVar(c, FST_VT_VCD_REG, FST_VD_IMPLICIT, 33, "v", 0);
+    s = fstWriterCreateVar(c, FST_VT_GEN_STRING, FST_VD_IMPLICIT, 0, "msg", 0);
+    r = fstWriterCreateVar(c, FST_VT_VCD_REAL, FST_VD_IMPLICIT, 8, "r", 0);
+    fstWriterCreateVar(c, FST_VT_VCD_WIRE, FST_VD_IMPLICIT, 4, "still", 0);
+    fstWriterSetUpscope(c);
+    for (int t = 0; t < 1000; t++) {
+        fstWriterEmitTimeChange(c, 100 + (uint64_t)t * 3);
+        fstWriterEmitValueChange(c, a, (rnd() & 1) ? "1" : "0");
+        if (t % 11 == 0) {
+            bits(buf, 33, "01x");
+            fstWriterEmitValueChange(c, v, buf);
+        }
+        if (t == 5 || t == 400)
+            fstWriterEmitVariableLengthValueChange(c, s, text, t == 5 ? 5 : 13);
+        if (t == 7)
+            real(c, r, 2.5);
+        if (t % 97 == 96)
+            fstWriterFlushContext(c);
+    }
+}
+
 /* Large enough that the LZ4 writer packs the hierarchy twice (over 4 MiB). */
 static void big_hier(fstWriterContext *c)
 {
@@ -350,6 +382,9 @@ static int corpus(const char *dir)
         rc |= write_case(dir, "repack", kitchen, o, 1);
         o.pack = FST_WR_PT_LZ4;
         rc |= write_case(dir, "repack_4", multiblock, o, 0);
+        o.repack = 0;
+        o.pack = FST_WR_PT_ZLIB;
+        rc |= write_case(dir, "clean_z", clean_blocks, o, 0);
     }
     {
         struct options o = {FST_WR_PT_ZLIB, 0, -9, 0};

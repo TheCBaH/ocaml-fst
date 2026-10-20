@@ -198,6 +198,13 @@ let check_seek t (name, select) =
       | Error e -> fail "replay: %s" (Fst.Error.to_string e)
       | Ok steps -> (
           let nb = Array.length steps in
+          (* [aligned_block] looks at every handle, whatever is selected. *)
+          let all_steps =
+            let c = ref [] in
+            match Fst.reader t (tagged_sink c) with
+            | Ok r -> ( match per_step r c with Ok s -> s | Error _ -> steps)
+            | Error _ -> steps
+          in
           match Fst.blocks t with
           | Error e -> fail "blocks: %s" (Fst.Error.to_string e)
           | Ok bs when Array.length bs <> nb -> fail "%d blocks, %d steps" (Array.length bs) nb
@@ -262,21 +269,29 @@ let check_seek t (name, select) =
                             held;
                           if List.exists (fun (_, s) -> s.[0] = 's') head then incr strings
                         end));
+                (* A block starts inside a time step when the replay does not announce its first time
+                   and an earlier block has changes at the time step that is open. *)
+                let partial i =
+                  i > 0
+                  && (match all_steps.(i) with c :: _ -> not (is_time c) | [] -> false)
+                  &&
+                  let open_step_has_changes = ref false in
+                  for s = 0 to i - 1 do
+                    List.iter
+                      (fun c ->
+                        if is_time c then open_step_has_changes := false
+                        else if fst c <> 0 then open_step_has_changes := true)
+                      all_steps.(s)
+                  done;
+                  !open_step_has_changes
+                in
+                let expected =
+                  let rec down j = if j > 0 && partial j then down (j - 1) else j in
+                  down k
+                in
                 match Fst.aligned_block t k with
                 | Error e -> bad "aligned_block %d: %s" k (Fst.Error.to_string e)
-                | Ok j ->
-                    if j < 0 || j > k then bad "aligned_block %d = %d" k j
-                    else begin
-                      (match steps.(k) with
-                      | c :: _ when k > 0 && not (is_time c) ->
-                          if j >= k then bad "aligned_block %d = %d inside a timestamp" k j
-                      | _ -> ());
-                      if j > 0 then
-                        match steps.(j) with
-                        | c :: _ when not (is_time c) ->
-                            bad "aligned_block %d = %d, which starts inside a timestamp" k j
-                        | _ -> ()
-                    end
+                | Ok j -> if j <> expected then bad "aligned_block %d = %d, want %d" k j expected
               done;
               (match Fst.reader_at ~select t (tagged_sink (ref [])) ~block:nb with
               | Ok _ -> bad "reader_at %d: no error" nb

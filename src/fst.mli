@@ -172,9 +172,10 @@ val reader_at :
     start where none does. *)
 
 val aligned_block : t -> int -> (int, Error.t) result
-(** [aligned_block t k] is the largest [j <= k] such that no timestamp has changes in both block
-    [j - 1] and block [j] (0 if there is none), from the blocks' time tables alone. A block
-    without changes is stepped over, as it cannot rule a spanning timestamp out. *)
+(** [aligned_block t k] is the largest [j <= k] such that no time step has changes both in block
+    [j] and in an earlier block (0 if there is none): a reader at [j] then sees whole time steps.
+    The blocks' time tables decide it, except where a block's first time is the one an earlier
+    block ended on: those blocks are then decoded to see whether both have changes there. *)
 
 (** VCD output. *)
 module Vcd : sig

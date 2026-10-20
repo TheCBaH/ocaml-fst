@@ -520,6 +520,35 @@ and strings_before r k =
     List.sort compare (Hashtbl.fold (fun h v acc -> (h, v) :: acc) last [])
   end
 
+(* Whether the first and the last time step of a block have changes, decoding every handle. *)
+let activity ~file ~signals b =
+  let times = ref 0 and first = ref false and last = ref false in
+  let change () =
+    if !times > 0 then begin
+      if !times = 1 then first := true;
+      last := true
+    end
+  in
+  let sink =
+    {
+      time =
+        (fun _ ->
+          incr times;
+          last := false);
+      frame = ignore;
+      bit = (fun _ _ -> change ());
+      vector = (fun _ _ _ _ -> change ());
+      real = (fun _ _ -> change ());
+      varlen = (fun _ _ _ _ -> change ());
+    }
+  in
+  let p = start ~file ~signals ~sink () in
+  p.blocks <- [ b ];
+  while step p do
+    ()
+  done;
+  (!first, !last)
+
 (* Starts at block [block] (0-based, within [file.vc_blocks]). *)
 let start_at ?select ?packed ~file ~signals ~sink ~block () =
   let r = start ?select ?packed ~file ~signals ~sink () in
