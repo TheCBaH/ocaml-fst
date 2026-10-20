@@ -16,6 +16,8 @@
         "ghcr.io/thecbah/ocaml-features/ocaml:1": {
             // CI sets OCAML_VERSION per matrix leg.
             "version": "${localEnv:OCAML_VERSION:4.14.4}",
+            // Same commit as fst.opam's pin-depends, so make deps finds it installed.
+            "pin-packages": "zipc git+https://github.com/dbuenzli/zipc.git#076e6168a222dfe46b7ba598dc87a9a2e58b2569",
             "packages": "dune#3.24.2 ocamlformat#0.28.1 zipc"
         }
     },

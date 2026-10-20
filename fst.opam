@@ -33,6 +33,8 @@ dev-repo: "git+https://github.com/TheCBaH/ocaml-fst.git"
 x-maintenance-intent: ["(latest)"]
 x-ai-disclosure: "ai-generated"
 x-ai-provider: "Anthropic, OpenAI"
+# zipc's zlib_decompress ~start fix (dbuenzli/zipc#10) is not released yet.
 pin-depends: [
+  ["zipc.dev" "git+https://github.com/dbuenzli/zipc.git#076e6168a222dfe46b7ba598dc87a9a2e58b2569"]
   ["unlz4.dev" "git+https://github.com/TheCBaH/ocaml-unlz4.git#f5446abf9a4ce4beb92b02ee958f345a6c8171bd"]
 ]
