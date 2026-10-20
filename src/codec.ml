@@ -18,9 +18,7 @@ let zlib_ratio = 1032
 
 let zlib ~what ~offset s ~off ~len ~size =
   ratio_check ~what ~offset ~ratio:zlib_ratio ~src_len:len size;
-  (* zipc 0.2.0 reads the Adler-32 at [len - 4], ignoring [start]: pass the exact range. *)
-  let s = if off = 0 && len = String.length s then s else String.sub s off len in
-  match Zipc_deflate.zlib_decompress ~decompressed_size:size s with
+  match Zipc_deflate.zlib_decompress ~decompressed_size:size ~start:off ~len s with
   | Ok (d, _) ->
       size_check ~what ~offset ~size (String.length d);
       d
