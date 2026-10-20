@@ -166,6 +166,155 @@ let check_packed t ~full (name, select) =
   else if stepped <> expected then Error (name ^ ": packed stepping differs")
   else Ok !packed_calls
 
+let is_time (h, s) = h = 0 && String.length s > 0 && s.[0] = '#'
+
+(* The calls of each step of a stepping reader. *)
+let per_step r calls =
+  let rec go acc =
+    calls := [];
+    match Fst.step r with
+    | Ok true -> go (List.rev !calls :: acc)
+    | Ok false -> Ok (Array.of_list (List.rev acc))
+    | Error e -> Error e
+  in
+  go []
+
+(* What a handle holds after [steps]: the last call that names it. *)
+let state_of steps =
+  let t = Hashtbl.create 64 in
+  Array.iter (List.iter (fun (h, s) -> if h <> 0 then Hashtbl.replace t h s)) steps;
+  t
+
+(* Seeking to each block of [t]: the calls from [reader_at k] are a frame holding what the replay
+   of the earlier blocks holds, then the later blocks' calls. Returns (seeks that recovered a
+   string, seeks inside a timestamp). *)
+let check_seek t (name, select) =
+  let fail fmt = Printf.ksprintf (fun s -> Error (name ^ ": " ^ s)) fmt in
+  let calls = ref [] in
+  match Fst.reader ~select t (tagged_sink calls) with
+  | Error e -> fail "reader: %s" (Fst.Error.to_string e)
+  | Ok r -> (
+      match per_step r calls with
+      | Error e -> fail "replay: %s" (Fst.Error.to_string e)
+      | Ok steps -> (
+          let nb = Array.length steps in
+          match Fst.blocks t with
+          | Error e -> fail "blocks: %s" (Fst.Error.to_string e)
+          | Ok bs when Array.length bs <> nb -> fail "%d blocks, %d steps" (Array.length bs) nb
+          | Ok bs ->
+              let strings = ref 0 and spans = ref 0 and result = ref (Ok ()) in
+              let bad fmt =
+                Printf.ksprintf (fun s -> if !result = Ok () then result := fail "%s" s) fmt
+              in
+              for k = 0 to nb - 1 do
+                let seek = ref [] in
+                (match Fst.reader_at ~select t (tagged_sink seek) ~block:k with
+                | Error e -> bad "reader_at %d: %s" k (Fst.Error.to_string e)
+                | Ok r -> (
+                    match per_step r seek with
+                    | Error e -> bad "seeking to %d: %s" k (Fst.Error.to_string e)
+                    | Ok got ->
+                        let got = List.concat (Array.to_list got) in
+                        let later = List.concat (Array.to_list (Array.sub steps k (nb - k))) in
+                        if k = 0 then (if got <> later then bad "reader_at 0 differs from reader")
+                        else begin
+                          let is_frame (h, s) =
+                            h = 0 && String.length s > 5 && String.sub s 0 5 = "frame"
+                          in
+                          (match got with
+                          | c :: _ when is_frame c ->
+                              if snd c <> Printf.sprintf "frame %Lu" bs.(k).Fst.start_time then
+                                bad "block %d: %s, starts at %Lu" k (snd c) bs.(k).start_time
+                          | _ -> bad "block %d: no frame first" k);
+                          let rec split acc = function
+                            | c :: rest when not (is_time c) -> split (c :: acc) rest
+                            | rest -> (List.rev acc, rest)
+                          in
+                          let head, tail = split [] (List.tl got) in
+                          let tail_expected =
+                            (* The replay merges a timestamp that spans the boundary and does not
+                               announce it again. *)
+                            match tail with
+                            | t0 :: tl
+                              when is_time t0 && match later with [] -> true | l0 :: _ -> l0 <> t0
+                              ->
+                                incr spans;
+                                tl
+                            | _ -> tail
+                          in
+                          if tail_expected <> later then begin
+                            let show l =
+                              String.concat "|" (List.filteri (fun i _ -> i < 4) (List.map snd l))
+                            in
+                            bad "block %d: later calls differ: got %s, want %s (%d vs %d)" k
+                              (show tail_expected) (show later) (List.length tail_expected)
+                              (List.length later)
+                          end;
+                          let held = state_of (Array.sub steps 0 k) in
+                          let seen = Hashtbl.create 64 in
+                          List.iter (fun (h, s) -> Hashtbl.replace seen h s) head;
+                          Hashtbl.iter
+                            (fun h s ->
+                              if Hashtbl.find_opt seen h <> Some s then
+                                bad "block %d: handle %d is %S, the replay has %S" k h
+                                  (Option.value (Hashtbl.find_opt seen h) ~default:"-")
+                                  s)
+                            held;
+                          if List.exists (fun (_, s) -> s.[0] = 's') head then incr strings
+                        end));
+                match Fst.aligned_block t k with
+                | Error e -> bad "aligned_block %d: %s" k (Fst.Error.to_string e)
+                | Ok j ->
+                    if j < 0 || j > k then bad "aligned_block %d = %d" k j
+                    else begin
+                      (match steps.(k) with
+                      | c :: _ when k > 0 && not (is_time c) ->
+                          if j >= k then bad "aligned_block %d = %d inside a timestamp" k j
+                      | _ -> ());
+                      if j > 0 then
+                        match steps.(j) with
+                        | c :: _ when not (is_time c) ->
+                            bad "aligned_block %d = %d, which starts inside a timestamp" k j
+                        | _ -> ()
+                    end
+              done;
+              (match Fst.reader_at ~select t (tagged_sink (ref [])) ~block:nb with
+              | Ok _ -> bad "reader_at %d: no error" nb
+              | Error _ -> ());
+              (match Fst.reader_at ~select t (tagged_sink (ref [])) ~block:(-1) with
+              | Ok _ -> bad "reader_at -1: no error"
+              | Error _ -> ());
+              (match Fst.aligned_block t nb with
+              | Ok _ -> bad "aligned_block %d: no error" nb
+              | Error _ -> ());
+              Result.map (fun () -> (!strings, !spans)) !result))
+
+(* The index reads a bounded number of bytes per block and none of the block's payload. *)
+let check_index path =
+  let data = Common.read_file path in
+  if data.[0] = '\xfe' then Ok () (* inflated whole when opened *)
+  else
+    let count = ref 0 in
+    let read pos len =
+      let p = Int64.to_int pos in
+      if p >= String.length data then ""
+      else begin
+        let s = String.sub data p (min len (String.length data - p)) in
+        count := !count + String.length s;
+        s
+      end
+    in
+    match Fst.Private.of_reader ~length:(Int64.of_int (String.length data)) ~read with
+    | Error _ -> Ok ()
+    | Ok t -> (
+        count := 0;
+        match Fst.blocks t with
+        | Error e -> Error (Fst.Error.to_string e)
+        | Ok bs ->
+            if !count <> 16 * Array.length bs then
+              Error (Printf.sprintf "%d bytes read for %d blocks" !count (Array.length bs))
+            else Ok ())
+
 let () =
   let dir = Sys.argv.(1) in
   let checked = ref 0 and failed = ref 0 in
@@ -263,8 +412,46 @@ let () =
             (masks (Int64.to_int (Fst.header t).max_handle));
           Fst.close t)
     (Common.files dir ".fst");
+  List.iter
+    (fun f ->
+      let path = Filename.concat dir f in
+      (match check_index path with
+      | Ok () -> ()
+      | Error e ->
+          incr failed;
+          Printf.printf "FAIL %s: index: %s\n" f e);
+      match Fst.open_file path with
+      | Error _ -> ()
+      | Ok t ->
+          List.iter
+            (fun m ->
+              match check_seek t m with
+              | Ok (strings, spans) ->
+                  if strings > 0 then Hashtbl.replace seen "seek-strings" ();
+                  if spans > 0 then Hashtbl.replace seen "seek-spanning" ()
+              | Error e ->
+                  incr failed;
+                  Printf.printf "FAIL %s: %s\n" f e)
+            (masks (Int64.to_int (Fst.header t).max_handle));
+          Fst.close t)
+    (Common.files dir ".fst");
   let required =
-    [ "1"; "5"; "8"; "4"; "6"; "7"; "ZWRAPPER"; "Z"; "F"; "4"; "multi-step"; "packed" ]
+    [
+      "1";
+      "5";
+      "8";
+      "4";
+      "6";
+      "7";
+      "ZWRAPPER";
+      "Z";
+      "F";
+      "4";
+      "multi-step";
+      "packed";
+      "seek-strings";
+      "seek-spanning";
+    ]
   in
   let missing = List.filter (fun k -> not (Hashtbl.mem seen k)) required in
   List.iter (Printf.printf "FAIL corpus lacks %s\n") missing;
