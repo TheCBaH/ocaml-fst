@@ -132,6 +132,40 @@ let check_select t ~full (name, select) =
          (Hashtbl.length asked) n)
   else Ok ()
 
+(* A packed vector, expanded to digits, is the call [vector] would have made; the others are
+   unchanged. Returns the number of packed calls. *)
+let check_packed t ~full (name, select) =
+  let expected = (fst full, List.filter (fun (h, _) -> h = 0 || select h) (snd full)) in
+  let packed_calls = ref 0 in
+  let run make =
+    let c = ref [] in
+    let packed h b off width =
+      incr packed_calls;
+      let digits =
+        String.init width (fun j ->
+            if (Char.code (Bytes.get b (off + (j lsr 3))) lsr (7 - (j land 7))) land 1 = 1 then '1'
+            else '0')
+      in
+      c := (h, Printf.sprintf "b%s %d" digits h) :: !c
+    in
+    let r = make ~packed (tagged_sink c) in
+    (r, List.rev !c)
+  in
+  let iterated = run (fun ~packed sink -> Fst.iter_changes ~select ~packed t sink) in
+  let stepped =
+    run (fun ~packed sink ->
+        match Fst.reader ~select ~packed t sink with
+        | Error e -> Error e
+        | Ok r ->
+            let rec go () =
+              match Fst.step r with Ok true -> go () | Ok false -> Ok () | Error e -> Error e
+            in
+            go ())
+  in
+  if iterated <> expected then Error (name ^ ": packed iter_changes differs")
+  else if stepped <> expected then Error (name ^ ": packed stepping differs")
+  else Ok !packed_calls
+
 let () =
   let dir = Sys.argv.(1) in
   let checked = ref 0 and failed = ref 0 in
@@ -213,7 +247,25 @@ let () =
             (masks (Int64.to_int (Fst.header t).max_handle));
           Fst.close t)
     (Common.files dir ".fst");
-  let required = [ "1"; "5"; "8"; "4"; "6"; "7"; "ZWRAPPER"; "Z"; "F"; "4"; "multi-step" ] in
+  List.iter
+    (fun f ->
+      match Fst.open_file (Filename.concat dir f) with
+      | Error _ -> ()
+      | Ok t ->
+          let full = calls t in
+          List.iter
+            (fun m ->
+              match check_packed t ~full m with
+              | Ok n -> if n > 0 then Hashtbl.replace seen "packed" ()
+              | Error e ->
+                  incr failed;
+                  Printf.printf "FAIL %s: %s\n" f e)
+            (masks (Int64.to_int (Fst.header t).max_handle));
+          Fst.close t)
+    (Common.files dir ".fst");
+  let required =
+    [ "1"; "5"; "8"; "4"; "6"; "7"; "ZWRAPPER"; "Z"; "F"; "4"; "multi-step"; "packed" ]
+  in
   let missing = List.filter (fun k -> not (Hashtbl.mem seen k)) required in
   List.iter (Printf.printf "FAIL corpus lacks %s\n") missing;
   Printf.printf "corpus: %d conversions, %d failed\n" !checked !failed;

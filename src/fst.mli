@@ -110,17 +110,32 @@ type sink = {
 (** Receives the value changes, in time order. Handles are 1-based and never aliases; bytes are
     only valid during the call and must not be modified. *)
 
-val iter_changes : ?select:(int -> bool) -> t -> sink -> (unit, Error.t) result
+val iter_changes :
+  ?select:(int -> bool) ->
+  ?packed:(int -> bytes -> int -> int -> unit) ->
+  t ->
+  sink ->
+  (unit, Error.t) result
 (** [select], when given, is called once per handle before the first block is read, and the
     sink then receives the [bit], [vector], [real] and [varlen] calls of the selected handles
     only: the others are neither decompressed nor traversed. [time] and [frame] calls are
-    unchanged, so the calls are those without [select] minus the unselected handles' ones. *)
+    unchanged, so the calls are those without [select] minus the unselected handles' ones.
+
+    [packed h bytes off width], when given, receives each changed vector that the file stores as
+    0 and 1 only, instead of [sink.vector]: [(width + 7) / 8] bytes, most significant bit
+    first, valid only during the call. Vectors with other values, the frame's vectors, reals and
+    strings go to the sink as before. *)
 
 type reader
 (** The value changes of a file, read one value change block at a time, so that only that
     block is decompressed in memory. *)
 
-val reader : ?select:(int -> bool) -> t -> sink -> (reader, Error.t) result
+val reader :
+  ?select:(int -> bool) ->
+  ?packed:(int -> bytes -> int -> int -> unit) ->
+  t ->
+  sink ->
+  (reader, Error.t) result
 (** Reads the hierarchy; no value change block yet. [select] is as in {!iter_changes}, called
     once per handle by the first {!step}, not here; later changes to what it consults have no
     effect. *)

@@ -174,7 +174,7 @@ let scratch st n =
     st.scratch <- Bytes.create (max n (2 * Bytes.length st.scratch));
   st.scratch
 
-let block ~(file : File.t) ~signals ~mask ~sink st ~secnum (b : File.block) =
+let block ~(file : File.t) ~signals ~mask ~packed ~sink st ~secnum (b : File.block) =
   let selected i = match mask with None -> true | Some m -> Array.unsafe_get m i in
   let little_endian = file.header.little_endian in
   let maxhandle = Array.length signals.lens in
@@ -363,13 +363,16 @@ let block ~(file : File.t) ~signals ~mask ~sink st ~secnum (b : File.block) =
             if vli land 1 = 0 then begin
               let n = ((l - 1) / 8) + 1 in
               if d + n > tlim then Error.fail Truncated off "%s: handle %d" w (idx + 1);
-              let sb = scratch st l in
-              for j = 0 to l - 1 do
-                let byte = Char.code (Bytes.unsafe_get trav (d + (j lsr 3))) in
-                Bytes.unsafe_set sb j
-                  (Char.unsafe_chr ((byte lsr (7 - (j land 7))) land 1 lor 0x30))
-              done;
-              sink.vector (idx + 1) sb 0 l;
+              (match packed with
+              | Some f -> f (idx + 1) trav d l
+              | None ->
+                  let sb = scratch st l in
+                  for j = 0 to l - 1 do
+                    let byte = Char.code (Bytes.unsafe_get trav (d + (j lsr 3))) in
+                    Bytes.unsafe_set sb j
+                      (Char.unsafe_chr ((byte lsr (7 - (j land 7))) land 1 lor 0x30))
+                  done;
+                  sink.vector (idx + 1) sb 0 l);
               (skip + n, false)
             end
             else begin
@@ -411,6 +414,7 @@ type reader = {
   file : File.t;
   signals : signals;
   sink : sink;
+  packed : (int -> bytes -> int -> int -> unit) option;
   st : state;
   mutable select : (int -> bool) option;  (** Until the first step builds [mask] from it. *)
   mutable mask : bool array option;
@@ -418,7 +422,7 @@ type reader = {
   mutable blocks : File.block list;
 }
 
-let start ?select ~(file : File.t) ~signals ~sink () =
+let start ?select ?packed ~(file : File.t) ~signals ~sink () =
   let maxhandle = Array.length signals.lens in
   let st =
     {
@@ -432,7 +436,7 @@ let start ?select ~(file : File.t) ~signals ~sink () =
       scratch = Bytes.create 64;
     }
   in
-  { file; signals; sink; st; select; mask = None; secnum = 0; blocks = file.vc_blocks }
+  { file; signals; sink; packed; st; select; mask = None; secnum = 0; blocks = file.vc_blocks }
 
 (* The pending blocks are dropped while one is decoded, so that an exception, ours or the
    sink's, ends the iteration. *)
@@ -447,7 +451,10 @@ let step r =
       let secnum = r.secnum in
       r.blocks <- [];
       let continue_ =
-        match block ~file:r.file ~signals:r.signals ~mask:r.mask ~sink:r.sink r.st ~secnum b with
+        match
+          block ~file:r.file ~signals:r.signals ~mask:r.mask ~packed:r.packed ~sink:r.sink r.st
+            ~secnum b
+        with
         | () -> true
         | exception Skip_block -> true
         | exception Exit -> false
@@ -459,8 +466,8 @@ let step r =
       true
   | _ -> false
 
-let iter ?select ~file ~signals ~sink () =
-  let r = start ?select ~file ~signals ~sink () in
+let iter ?select ?packed ~file ~signals ~sink () =
+  let r = start ?select ?packed ~file ~signals ~sink () in
   while step r do
     ()
   done

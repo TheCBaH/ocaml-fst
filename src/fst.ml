@@ -93,13 +93,13 @@ let signals t =
     | _ -> ());
   { Vc.lens = Array.of_list (List.rev !lens); reals = Array.of_list (List.rev !reals) }
 
-let iter_changes ?select t sink =
-  Err.catch (fun () -> Vc.iter ?select ~file:t ~signals:(signals t) ~sink ())
+let iter_changes ?select ?packed t sink =
+  Err.catch (fun () -> Vc.iter ?select ?packed ~file:t ~signals:(signals t) ~sink ())
 
 type reader = Vc.reader
 
-let reader ?select t sink =
-  Err.catch (fun () -> Vc.start ?select ~file:t ~signals:(signals t) ~sink ())
+let reader ?select ?packed t sink =
+  Err.catch (fun () -> Vc.start ?select ?packed ~file:t ~signals:(signals t) ~sink ())
 
 let step r = Err.catch (fun () -> Vc.step r)
 
