@@ -1,0 +1,8 @@
+; fst2vcd as a process: what it prints and returns when its output cannot be written.
+
+(test
+ (name test_cli)
+ (libraries fst_fixture unix)
+ (deps %{exe:../../bin/fst2vcd.exe})
+ (action
+  (run %{test} %{exe:../../bin/fst2vcd.exe})))

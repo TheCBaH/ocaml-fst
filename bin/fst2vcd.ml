@@ -48,5 +48,15 @@ let () =
       in
       let r = Fst.Vcd.write ~extensions:!extensions t oc in
       Fst.close t;
-      close_out oc;
-      match r with Ok () -> () | Error e -> fail "%s: %s" path (Fst.Error.to_string e))
+      (* A closed channel is not flushed again at exit, which would raise once more. *)
+      let finish () =
+        try if oc == stdout then flush oc else close_out oc
+        with Sys_error m ->
+          close_out_noerr oc;
+          fail "Could not write '%s', exiting: %s" (Option.value !outname ~default:"stdout") m
+      in
+      match r with
+      | Error e ->
+          close_out_noerr oc;
+          fail "%s: %s" path (Fst.Error.to_string e)
+      | Ok () -> finish ())
