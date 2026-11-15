@@ -221,7 +221,9 @@ let fixture_blackouts () =
     | Ok _ -> check (name ^ ": Ok") false
   in
   kind "fewer records than counted" (varint64 2L ^ "\001\005") Fst.Error.Truncated;
-  kind "huge record count" (varint64 0xFFFF_FFFFL) Malformed;
+  (* 2^32 - 1 fits an int only where ints have more than 32 bits. *)
+  kind "huge record count" (varint64 0xFFFF_FFFFL)
+    (if Sys.int_size > 32 then Malformed else Limit_exceeded);
   kind "truncated delta" (varint64 1L ^ "\001\128") Truncated
 
 let geometry_block ~uclen ~count data = section 3 (u64 uclen ^ u64 count ^ data)
