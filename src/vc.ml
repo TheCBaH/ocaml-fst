@@ -304,8 +304,14 @@ let block ~(file : File.t) ~signals ~mask ~packed ~recovered ~sink st ~secnum (b
       if clen < 0 || dpos + clen > len then
         Error.fail Truncated (at dpos) "%s: handle %d" what (i + 1);
       if selected i then begin
-        reserve st (!toffs + dest);
         let w = "value changes" and offset = at dpos in
+        if v <> 0 then begin
+          let ratio =
+            if packtype = '4' || packtype = 'F' then Codec.lz_ratio else Codec.zlib_ratio
+          in
+          Codec.ratio_check ~what:w ~offset ~ratio ~src_len:clen dest
+        end;
+        reserve st (!toffs + dest);
         if v = 0 then Bytes.blit_string data dpos st.trav !toffs dest
         else begin
           match packtype with

@@ -67,4 +67,22 @@ let () =
         Fst.Error.Malformed (F.set_length spec ~signal:2 n))
     [ 0; 4; 7; 9; 16 ]
 
+(* D3: a chain declares a huge size, which must be refused before any buffer is allocated. *)
+let () =
+  let spec =
+    F.make
+      [ F.signal "a" F.Bit; F.signal "v" (F.Vector 8) ]
+      [ F.block ~times:[ 10L; 20L ] [ (0, 1, F.B '1'); (0, 2, F.V "10100101") ] ]
+  in
+  let dest = min (1 lsl 30) (Sys.max_string_length - 1024) in
+  let t = open_ (F.set_chain_dest spec ~block:0 ~handle:2 dest) in
+  let before = Gc.allocated_bytes () in
+  let r = Fst.iter_changes t sink in
+  let allocated = Gc.allocated_bytes () -. before in
+  (match r with
+  | Error e -> check "huge dest: Limit_exceeded" (Fst.Error.kind e = Fst.Error.Limit_exceeded)
+  | Ok () -> check "huge dest: Ok" false);
+  check (Printf.sprintf "huge dest allocated %.0f bytes" allocated) (allocated < 1e6);
+  Fst.close t
+
 let () = if !failures > 0 then exit 1
