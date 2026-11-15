@@ -96,6 +96,21 @@ val geometry : t -> (int64 array, Error.t) result
 
 val fold_hierarchy : t -> init:'a -> f:('a -> Hier.entry -> 'a) -> ('a, Error.t) result
 
+type kind =
+  | Bit  (** One bit: the sink's [bit]. *)
+  | Vector  (** More than one bit: [vector]. *)
+  | Port  (** A [port] variable of more than one bit: [vector], as 3n+2 characters. *)
+  | Real  (** [real]. *)
+  | String  (** Zero length: [varlen]. *)
+
+val signals : t -> ((kind * int) array, Error.t) result
+(** The kind and declared length of each variable that is not an alias, indexed by handle minus
+    one: bits, 3n+2 for a port, 8 for a real, 0 for a string. Its length is the number of
+    handles, and the sink's calls for a handle are those of its kind. The hierarchy is read on
+    the first call and the outcome, an error included, is kept: later calls return the very
+    same value. A real whose declared length is not 8 is [Malformed], here and so from
+    every function that reads values. *)
+
 type sink = {
   time : int64 -> unit;  (** Changes that follow are at this time, which differs from the last. *)
   frame : int64 -> unit;

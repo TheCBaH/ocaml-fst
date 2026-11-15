@@ -77,3 +77,8 @@ let cstring t ~max what =
       t.pos <- e + 1;
       v
   | _ -> truncated t what
+
+let skip_cstring t what =
+  match String.index_from_opt t.s t.pos '\000' with
+  | Some e when e < t.lim -> t.pos <- e + 1
+  | _ -> truncated t what

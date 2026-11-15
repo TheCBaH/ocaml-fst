@@ -2,7 +2,15 @@
 [@@@ai_provider "Anthropic"]
 
 type kind = Bit | Vector of int | Real | String
-type signal = { name : string; kind : kind; alias : int option; decl_len : int option }
+
+type signal = {
+  name : string;
+  kind : kind;
+  alias : int option;
+  decl_len : int option;
+  var_type : int option;
+}
+
 type value = B of char | V of string | R of float | S of string
 
 type block = {
@@ -20,7 +28,7 @@ type block = {
 
 type t = { timescale : int; scope : string; signals : signal list; blocks : block list }
 
-let signal ?alias name kind = { name; kind; alias; decl_len = None }
+let signal ?alias name kind = { name; kind; alias; decl_len = None; var_type = None }
 
 let block ?start ?(frame = []) ~times changes =
   let first = match times with t :: _ -> t | [] -> 0L in
@@ -46,6 +54,9 @@ let update_nth l n f =
 
 let set_length t ~signal n =
   { t with signals = update_nth t.signals (signal - 1) (fun s -> { s with decl_len = Some n }) }
+
+let set_var_type t ~signal ty =
+  { t with signals = update_nth t.signals (signal - 1) (fun s -> { s with var_type = Some ty }) }
 
 let set_alias_target t ~signal target =
   { t with signals = update_nth t.signals (signal - 1) (fun s -> { s with alias = Some target }) }
@@ -94,7 +105,13 @@ let pad s n c =
 let rcv = "xzhuwl-?"
 let natural_len = function Bit -> 1 | Vector n -> n | Real -> 8 | String -> 0
 let length s = Option.value s.decl_len ~default:(natural_len s.kind)
-let var_type = function Bit | Vector _ -> 16 | Real -> 3 | String -> 21
+
+let var_type s =
+  match (s.var_type, s.kind) with
+  | Some ty, _ -> ty
+  | None, (Bit | Vector _) -> 16
+  | None, Real -> 3
+  | None, String -> 21
 
 (* Handles of the variables that are not aliases, in order. *)
 let handle_signals t = List.filter (fun s -> s.alias = None) t.signals
@@ -105,7 +122,7 @@ let hierarchy t =
   List.iter
     (fun s ->
       Printf.bprintf b "%c%c%s\000%s%s"
-        (Char.chr (var_type s.kind))
+        (Char.chr (var_type s))
         '\000' s.name
         (varint (length s))
         (varint (Option.value s.alias ~default:0)))

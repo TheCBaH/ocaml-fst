@@ -68,6 +68,16 @@ let () =
   let h = Fst.header t in
   check "header times" (h.start_time = 5L && h.end_time = 50L);
   check "header counts" (h.var_count = 6L && h.max_handle = 5L && h.vc_section_count = 2L);
+  (let expected = [| (Fst.Bit, 1); (Vector, 8); (Vector, 3); (Real, 8); (String, 0) |] in
+   let a = ok "signals" (Fst.signals t) in
+   check "signals" (a = expected);
+   check "signals are cached" (Fst.signals t == Fst.signals t);
+   let port = read (F.build (F.set_var_type spec ~signal:2 18)) in
+   check "port kind"
+     (ok "signals" (Fst.signals port)
+     = [| (Fst.Bit, 1); (Port, 8); (Vector, 3); (Real, 8); (String, 0) |]);
+   let zero = read (F.build (F.set_length spec ~signal:2 0)) in
+   check "zero length is a string" ((ok "signals" (Fst.signals zero)).(1) = (Fst.String, 0)));
   check "block count" (Array.length (ok "blocks" (Fst.blocks t)) = 2);
   let vcd = ok "vcd" (Fst.Vcd.to_string t) in
   List.iter

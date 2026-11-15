@@ -80,24 +80,18 @@ type sink = Vc.sink = {
   varlen : int -> bytes -> int -> int -> unit;
 }
 
-let signals t =
-  let lens = ref [] and reals = ref [] in
-  let base = match t.File.hier with Some b -> b.pos | None -> -1L in
-  H.fold ~base (File.hierarchy_data t) ~init:() ~f:(fun () -> function
-    | H.Var { var_type; length; alias = false; _ } ->
-        H.check_real ~base ~var_type ~length;
-        lens := length :: !lens;
-        reals := H.is_real var_type :: !reals
-    | _ -> ());
-  { Vc.lens = Array.of_list (List.rev !lens); reals = Array.of_list (List.rev !reals) }
+type kind = H.kind = Bit | Vector | Port | Real | String
+
+let signals (t : t) = File.signals t
+let tables t = Vc.tables (File.signals_exn t)
 
 let iter_changes ?select ?packed t sink =
-  Err.catch (fun () -> Vc.iter ?select ?packed ~file:t ~signals:(signals t) ~sink ())
+  Err.catch (fun () -> Vc.iter ?select ?packed ~file:t ~signals:(tables t) ~sink ())
 
 type reader = Vc.reader
 
 let reader ?select ?packed t sink =
-  Err.catch (fun () -> Vc.start ?select ?packed ~file:t ~signals:(signals t) ~sink ())
+  Err.catch (fun () -> Vc.start ?select ?packed ~file:t ~signals:(tables t) ~sink ())
 
 let step r = Err.catch (fun () -> Vc.step r)
 
@@ -105,26 +99,25 @@ type block = { start_time : int64; end_time : int64; pos : int }
 
 let blocks (t : t) =
   Err.catch (fun () ->
-      Array.of_list
-        (List.map
-           (fun (b : File.block) ->
-             let start_time, end_time = File.block_times t.src b in
-             { start_time; end_time; pos = Int64.to_int b.pos })
-           t.vc_blocks))
+      Array.map
+        (fun (b : File.block) ->
+          let start_time, end_time = File.block_times t.src b in
+          { start_time; end_time; pos = Int64.to_int b.pos })
+        t.vc_blocks)
 
 let check_block (t : t) k =
-  if k < 0 || k >= List.length t.vc_blocks then
-    Err.fail Err.Malformed (-1L) "block %d: the file has %d" k (List.length t.vc_blocks)
+  if k < 0 || k >= Array.length t.vc_blocks then
+    Err.fail Err.Malformed (-1L) "block %d: the file has %d" k (Array.length t.vc_blocks)
 
 let reader_at ?select ?packed t sink ~block =
   Err.catch (fun () ->
       check_block t block;
-      Vc.start_at ?select ?packed ~file:t ~signals:(signals t) ~sink ~block ())
+      Vc.start_at ?select ?packed ~file:t ~signals:(tables t) ~sink ~block ())
 
 let aligned_block (t : t) k =
   Err.catch (fun () ->
       check_block t k;
-      let bs = Array.of_list t.vc_blocks in
+      let bs = t.vc_blocks in
       let ends = Array.make (Array.length bs) None in
       let ends_of j =
         match ends.(j) with
@@ -134,13 +127,13 @@ let aligned_block (t : t) k =
             ends.(j) <- Some e;
             e
       in
-      let signals = signals t in
+      let signals = tables t in
       let activity = Array.make (Array.length bs) None in
       let activity_of j =
         match activity.(j) with
         | Some a -> a
         | None ->
-            let a = Vc.activity ~file:t ~signals bs.(j) in
+            let a = Vc.activity ~file:t ~signals j in
             activity.(j) <- Some a;
             a
       in
@@ -218,9 +211,10 @@ module Private = struct
 
   let block_types (t : t) =
     (match t.hier with Some b -> [ b.typ ] | None -> [])
-    @ List.map (fun (b : File.block) -> b.typ) t.vc_blocks
+    @ List.map (fun (b : File.block) -> b.typ) (Array.to_list t.vc_blocks)
 
-  let packtypes (t : t) = Err.catch (fun () -> List.map (File.packtype t) t.vc_blocks)
+  let packtypes (t : t) =
+    Err.catch (fun () -> Array.to_list (Array.map (File.packtype t) t.vc_blocks))
 
   let parse_chain s ~alias2 ~vc_maxhandle ~vc_len =
     let table = Array.make (vc_maxhandle + 1) 0 and lengths = Array.make (vc_maxhandle + 1) 0 in
