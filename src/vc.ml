@@ -460,20 +460,13 @@ let rec step r =
   | b :: rest when r.secnum < r.file.vc_section_count ->
       let secnum = r.secnum in
       r.blocks <- [];
-      let continue_ =
-        match
-          block ~file:r.file ~signals:r.signals ~mask:r.mask ~packed:r.packed ~recovered:r.recovered
-            ~sink:r.sink r.st ~secnum b
-        with
-        | () -> true
-        | exception Skip_block -> true
-        | exception Exit -> false
-      in
-      if continue_ then begin
-        r.recovered <- None;
-        r.blocks <- rest;
-        r.secnum <- secnum + 1
-      end;
+      (try
+         block ~file:r.file ~signals:r.signals ~mask:r.mask ~packed:r.packed ~recovered:r.recovered
+           ~sink:r.sink r.st ~secnum b
+       with Skip_block -> ());
+      r.recovered <- None;
+      r.blocks <- rest;
+      r.secnum <- secnum + 1;
       true
   | _ -> false
 

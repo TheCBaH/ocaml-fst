@@ -121,4 +121,31 @@ let () =
   at_block "negative-sized clen" (fun set -> set ~uclen:2 ~clen:(-1) ~nitems:2);
   at_block "more items than bytes" (fun set -> set ~uclen:2 ~clen:2 ~nitems:3)
 
+(* D1: a sink's [Exit] reaches the caller. *)
+let () =
+  let spec =
+    F.make
+      [ F.signal "a" F.Bit ]
+      [
+        F.block ~times:[ 10L; 20L ] [ (0, 1, F.B '1') ]; F.block ~times:[ 30L ] [ (0, 1, F.B '0') ];
+      ]
+  in
+  let t = open_ spec in
+  let raising = { sink with Fst.time = (fun _ -> raise Exit) } in
+  check "iter_changes: Exit reaches the caller"
+    (match Fst.iter_changes t raising with exception Exit -> true | _ -> false);
+  let r = match Fst.reader t raising with Ok r -> r | Error _ -> failwith "reader" in
+  check "step: Exit reaches the caller"
+    (match Fst.step r with exception Exit -> true | _ -> false);
+  check "step after the exception: no block remains" (Fst.step r = Ok false);
+  Fst.close t;
+  Fst.close t;
+  let t = open_ spec in
+  check "iter_changes: other exceptions too"
+    (match Fst.iter_changes t { sink with Fst.bit = (fun _ _ -> failwith "sink") } with
+    | exception Failure _ -> true
+    | _ -> false);
+  check "the file is still usable" (Fst.iter_changes t sink = Ok ());
+  Fst.close t
+
 let () = if !failures > 0 then exit 1
