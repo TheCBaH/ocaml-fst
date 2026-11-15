@@ -15,7 +15,9 @@ module Error : sig
   type kind =
     | Truncated  (** The input ends inside a block or record. *)
     | Malformed  (** A block or record breaks the format. *)
-    | Unsupported  (** A feature this reader does not handle. *)
+    | Unsupported
+        (** A feature this reader does not handle: a gzip method other than deflate, or a file with
+            both a gzip and an LZ4 hierarchy block (libfst keeps the last). *)
     | Decompression  (** A compressed section does not decode to its declared size. *)
     | Limit_exceeded  (** A size does not fit the platform's [int] or strings. *)
     | Io  (** The file cannot be opened or read. *)

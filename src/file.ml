@@ -30,6 +30,7 @@ type t = {
   vc_blocks : block array;  (** The ones libfst iterates: before the first SKIP block. *)
   geometry : block option;
   hier : block option;
+  mixed_hier : bool;  (** Both a gzip and an LZ4 hierarchy block: libfst takes the last. *)
   blackouts : (int64 * bool) array;
   mutable signals : ((Hier.kind * int) array, Error.t) result option;
   mutable closed : bool;
@@ -149,7 +150,8 @@ let index src =
         header;
         vc_blocks = Array.of_list (List.rev !vc);
         geometry = !geometry;
-        hier = (match !hier_kinds with true, true -> None | _ -> !hier);
+        hier = !hier;
+        mixed_hier = !hier_kinds = (true, true);
         blackouts = !blackouts;
         signals = None;
         closed = false;
@@ -222,6 +224,7 @@ let geometry t =
 let hierarchy_data t =
   let what = "hierarchy" in
   check_open t;
+  if t.mixed_hier then Error.fail Unsupported (-1L) "gzip and LZ4 hierarchy blocks in one file";
   match t.hier with
   | None -> Error.fail Malformed (-1L) "no hierarchy block"
   | Some b ->

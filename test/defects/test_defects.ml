@@ -189,6 +189,33 @@ let () =
       Fst.close t)
     [ 3; 4; 1000; 1 lsl 29 ]
 
+(* D7: a gzip and an LZ4 hierarchy block in one file. libfst keeps the last; here neither is
+   preferred. *)
+let () =
+  let spec = F.make [ F.signal "a" F.Bit ] [ F.block ~times:[ 10L ] [ (0, 1, F.B '1') ] ] in
+  let section typ =
+    let b = Bytes.make 17 '\000' in
+    Bytes.set b 0 (Char.chr typ);
+    Bytes.set_int64_be b 1 16L;
+    Bytes.to_string b
+  in
+  let t = open_ spec in
+  check "one hierarchy block" (Result.is_ok (Fst.Vcd.to_string t));
+  Fst.close t;
+  List.iter
+    (fun typ ->
+      match Fst.of_string (F.build spec ^ section typ) with
+      | Error e -> check ("open: " ^ Fst.Error.to_string e) false
+      | Ok t ->
+          let name = Printf.sprintf "gzip and type %d hierarchy" typ in
+          expect (name ^ " fold_hierarchy") Fst.Error.Unsupported (fun () ->
+              Result.map ignore (Fst.fold_hierarchy t ~init:() ~f:(fun () _ -> ())));
+          expect (name ^ " iter_changes") Fst.Error.Unsupported (fun () -> Fst.iter_changes t sink);
+          expect (name ^ " Vcd.to_string") Fst.Error.Unsupported (fun () ->
+              Result.map ignore (Fst.Vcd.to_string t));
+          Fst.close t)
+    [ 6; 7 ]
+
 (* D7: an error's offset says which coordinate system it is in. *)
 let () =
   let spec =
