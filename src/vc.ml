@@ -15,6 +15,16 @@ type sink = {
   varlen : int -> bytes -> int -> int -> unit;
 }
 
+let ignore_sink =
+  {
+    time = ignore;
+    frame = ignore;
+    bit = (fun _ _ -> ());
+    vector = (fun _ _ _ _ -> ());
+    real = (fun _ _ -> ());
+    varlen = (fun _ _ _ _ -> ());
+  }
+
 (* What the traversal needs from the hierarchy: per handle (0-based), the declared length and
    whether it is a real. *)
 type signals = { lens : int array; reals : bool array }
@@ -496,11 +506,7 @@ and strings_before r k =
     let last = Hashtbl.create 16 in
     let sink =
       {
-        time = ignore;
-        frame = ignore;
-        bit = (fun _ _ -> ());
-        vector = (fun _ _ _ _ -> ());
-        real = (fun _ _ -> ());
+        ignore_sink with
         varlen = (fun h b off len -> Hashtbl.replace last h (Bytes.sub_string b off len));
       }
     in

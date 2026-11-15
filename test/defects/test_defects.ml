@@ -11,15 +11,7 @@ let check name ok =
     Printf.printf "FAIL %s\n%!" name
   end
 
-let sink =
-  {
-    Fst.time = ignore;
-    frame = ignore;
-    bit = (fun _ _ -> ());
-    vector = (fun _ _ _ _ -> ());
-    real = (fun _ _ -> ());
-    varlen = (fun _ _ _ _ -> ());
-  }
+let sink = Fst.ignore_sink
 
 (* [f] returns an [Error] of [kind]; [Ok] or an exception fails. *)
 let expect name kind f =
@@ -280,6 +272,22 @@ let () =
             (Fst.Error.kind e = Limit_exceeded && !fits)
       | Ok _ -> check (name ^ ": Ok") false)
     big
+
+(* D7: [ignore_sink] ignores everything, and a record update receives only what it overrides. *)
+let () =
+  let spec =
+    F.make
+      [ F.signal "a" F.Bit; F.signal "v" (F.Vector 4) ]
+      [ F.block ~times:[ 10L; 20L ] [ (0, 1, F.B '1'); (1, 2, F.V "1010"); (1, 1, F.B '0') ] ]
+  in
+  let t = open_ spec in
+  check "ignore_sink" (Fst.iter_changes t Fst.ignore_sink = Ok ());
+  let bits = ref 0 and vectors = ref 0 in
+  let counting =
+    { Fst.ignore_sink with bit = (fun _ _ -> incr bits); vector = (fun _ _ _ _ -> incr vectors) }
+  in
+  check "counting" (Fst.iter_changes t counting = Ok () && !bits = 2 && !vectors = 1);
+  Fst.close t
 
 (* D1: a sink's [Exit] reaches the caller. *)
 let () =

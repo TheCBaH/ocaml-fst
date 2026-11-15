@@ -20,16 +20,7 @@ let spec =
     ]
 
 let data = F.build spec
-
-let sink =
-  {
-    Fst.time = ignore;
-    frame = ignore;
-    bit = (fun _ _ -> ());
-    vector = (fun _ _ _ _ -> ());
-    real = (fun _ _ -> ());
-    varlen = (fun _ _ _ _ -> ());
-  }
+let sink = Fst.ignore_sink
 
 let is_io name = function
   | Error e -> check (name ^ ": " ^ Fst.Error.to_string e) (Fst.Error.kind e = Fst.Error.Io)

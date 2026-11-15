@@ -80,6 +80,8 @@ type sink = Vc.sink = {
   varlen : int -> bytes -> int -> int -> unit;
 }
 
+let ignore_sink = Vc.ignore_sink
+
 type kind = H.kind = Bit | Vector | Port | Real | String
 
 let signals (t : t) = File.signals t

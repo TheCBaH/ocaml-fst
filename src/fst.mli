@@ -130,6 +130,10 @@ type sink = {
 (** Receives the value changes, in time order. Handles are 1-based and never aliases; bytes are
     only valid during the call and must not be modified. *)
 
+val ignore_sink : sink
+(** Ignores every call. Write [{ Fst.ignore_sink with bit = ... }] to receive some of them: the
+    code then compiles unchanged if [sink] gains a field. *)
+
 val iter_changes :
   ?select:(int -> bool) ->
   ?packed:(int -> bytes -> int -> int -> unit) ->
