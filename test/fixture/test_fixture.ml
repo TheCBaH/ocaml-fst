@@ -166,5 +166,75 @@ let () =
   counted "wrapped" (wrapped s) ~opens:true ~after_close:1;
   counted "wrapped truncated" (String.sub (wrapped s) 0 20) ~opens:false ~after_close:0;
   counted "wrapped, bad inner" (wrapped (String.sub s 0 40)) ~opens:false ~after_close:0;
-  counted "no header" "" ~opens:false ~after_close:0;
+  counted "no header" "" ~opens:false ~after_close:0
+
+(* D6: a variable that is an unresolved dynamic alias in one block keeps its negative chain length
+   when the next block lists it as unchanged, and that block then resolves it as the alias. Handle 2
+   aliases the later handle 4, which libfst's parser leaves unresolved; handle 5 aliases handle 2
+   and takes over its length. (A forward alias must not precede the first chain: the parser would
+   overwrite its length.) libfst's writer only aliases earlier handles, so only a fixture
+   produces this. *)
+let stale =
+  F.make
+    (List.map (fun n -> F.signal n F.Bit) [ "a"; "b"; "c"; "d"; "e" ])
+    [
+      F.block
+        ~aliases:[ (2, 4); (5, 2) ]
+        ~times:[ 10L; 20L ]
+        [ (0, 1, F.B '1'); (0, 4, F.B '1'); (1, 4, F.B '0') ];
+      F.block ~max_handle:5 ~times:[ 30L; 40L ]
+        [ (0, 1, F.B '0'); (0, 4, F.B '1'); (1, 4, F.B 'z') ];
+    ]
+
+let tagged calls =
+  let add h fmt = Printf.ksprintf (fun s -> calls := (h, s) :: !calls) fmt in
+  {
+    Fst.ignore_sink with
+    time = (fun t -> add 0 "#%Ld" t);
+    frame = (fun t -> add 0 "frame %Ld" t);
+    bit = (fun h c -> add h "%d=%c" h c);
+  }
+
+let steps r calls =
+  let rec go acc =
+    calls := [];
+    if ok "step" (Fst.step r) then go (List.rev !calls :: acc) else List.rev acc
+  in
+  go []
+
+let rec after_frame = function
+  | (0, s) :: rest when String.length s > 1 && s.[0] = '#' -> (0, s) :: rest
+  | _ :: rest -> after_frame rest
+  | [] -> []
+
+(* The sequential read's calls from block [k] on, and those of [reader_at k] after its frame. *)
+let suffix_and_seek t k =
+  let c = ref [] in
+  let all = steps (ok "reader" (Fst.reader t (tagged c))) c in
+  let suffix = List.concat (List.filteri (fun i _ -> i >= k) all) in
+  let c = ref [] in
+  let seek = steps (ok "reader_at" (Fst.reader_at t (tagged c) ~block:k)) c in
+  (suffix, after_frame (List.concat seek))
+
+(* Known divergence (S3): [reader_at] does not replay earlier blocks' chain tables, so it misses
+   handle 5's changes in block 1. S3 sets this to false, which asserts equality. *)
+let known_divergence = true
+
+let () =
+  let exe = Sys.argv.(1) in
+  let s = F.build stale in
+  let t = read s in
+  let suffix, seek = suffix_and_seek t 1 in
+  let show l = String.concat " " (List.map snd l) in
+  check "stale: block 1 sequentially gives handle 5 handle 4's changes"
+    (suffix = [ (0, "#30"); (5, "5=1"); (4, "4=1"); (1, "1=0"); (0, "#40"); (4, "4=z"); (5, "5=z") ]);
+  check
+    (Printf.sprintf "stale: reader_at 1 = sequential suffix%s (suffix: %s; reader_at 1: %s)"
+       (if known_divergence then " is a known divergence (S3)" else "")
+       (show suffix) (show seek))
+    (suffix = seek <> known_divergence);
+  (match reference exe s with
+  | Some expected ->
+      check "libfst agrees with the stale fixture" (expected = ok "vcd" (Fst.Vcd.to_string t))
+  | None -> check "libfst rejected the stale fixture" false);
   if !failures > 0 then exit 1

@@ -26,6 +26,13 @@ type block = {
   chain_dest : (int * int) list;  (** [(handle, dest)]: the chain's leading size varint. *)
   chain_table : string option;  (** Replaces the encoded chain table. *)
   trailer : (int * int * int) option;  (** Replaces the time table's [(uclen, clen, nitems)]. *)
+  aliases : (int * int) list;
+      (** [(handle, target)]: the chain table entry of a dynamic alias, which libfst writes as 0
+          and the 1-based target (the non-alias2 encoding). *)
+  max_handle : int option;
+      (** The block's handle count; by default the last handle with a chain or an alias. Handles
+          past the last chain are then zero entries. *)
+  typ : int;  (** The section type; 5 by default if there are [aliases], otherwise 1. *)
 }
 
 type t = { timescale : int; scope : string; signals : signal list; blocks : block list }
@@ -33,7 +40,14 @@ type t = { timescale : int; scope : string; signals : signal list; blocks : bloc
 val signal : ?alias:int -> string -> kind -> signal
 
 val block :
-  ?start:int64 -> ?frame:(int * value) list -> times:int64 list -> (int * int * value) list -> block
+  ?start:int64 ->
+  ?frame:(int * value) list ->
+  ?aliases:(int * int) list ->
+  ?max_handle:int ->
+  ?typ:int ->
+  times:int64 list ->
+  (int * int * value) list ->
+  block
 (** Starts at [start], by default the first time, and ends at the last time. *)
 
 val make : ?timescale:int -> signal list -> block list -> t
