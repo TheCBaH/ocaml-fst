@@ -233,8 +233,42 @@ let () =
        (if known_divergence then " is a known divergence (S3)" else "")
        (show suffix) (show seek))
     (suffix = seek <> known_divergence);
-  (match reference exe s with
+  match reference exe s with
   | Some expected ->
       check "libfst agrees with the stale fixture" (expected = ok "vcd" (Fst.Vcd.to_string t))
-  | None -> check "libfst rejected the stale fixture" false);
+  | None -> check "libfst rejected the stale fixture" false
+
+(* libfst's time-limited read starts from empty chain tables too, so it shares reader_at's
+   divergence: its changes from block 1 on lack handle 5's. S3 makes reader_at agree with the
+   sequential read, and libfst's time-limited read then differs from it. *)
+let () =
+  let exe = Sys.argv.(1) in
+  let s = F.build stale in
+  let t = read s in
+  let path = Filename.temp_file "stale" ".fst" in
+  Out_channel.with_open_bin path (fun oc -> output_string oc s);
+  let records what = function
+    | Ok l -> l
+    | Error e ->
+        check (what ^ ": " ^ e) false;
+        []
+  in
+  let sequential = records "libfst" (Time_range.libfst exe path) in
+  let bs = ok "blocks" (Fst.blocks t) in
+  (match Time_range.start_for bs 1 with
+  | None -> check "stale: no time range start reaches block 1" false
+  | Some start ->
+      let limited = records "libfst, limited" (Time_range.libfst exe ~start path) in
+      let seek = records "reader_at" (Time_range.reader_at t ~block:1) in
+      check "stale: libfst's sequential read has handle 5 in block 1"
+        (List.mem "30 5 v:1" sequential);
+      check "stale: libfst's time-limited read has only handle 5's frame value"
+        (List.filter (fun r -> List.nth (String.split_on_char ' ' r) 1 = "5") limited
+        = [ "30 5 v:x" ]);
+      check
+        (if known_divergence then
+           "stale: libfst's time-limited read = reader_at 1 (shared divergence)"
+         else "stale: libfst's time-limited read differs from reader_at 1 (its exception)")
+        (limited = seek = known_divergence));
+  Sys.remove path;
   if !failures > 0 then exit 1
