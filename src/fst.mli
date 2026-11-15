@@ -224,6 +224,10 @@ val reader_at :
     the block's first time even when the previous block ended on it, so a timestamp that spans
     the boundary is seen in two parts: use {!aligned_block} to start where none does.
 
+    The handle remembers what the earlier blocks held, per set of selected string handles, so
+    that seeks in any order read each earlier block at most once; {!close} drops it. A damaged
+    earlier block fails every seek past it, with the same error each time.
+
     One exception: libfst's parser leaves a chain length negative for a forward alias (one that
     names a later handle, which only a hand-built file has), and a sequential read carries it
     into a later block that lists the handle as unchanged. A seek does not carry it into the

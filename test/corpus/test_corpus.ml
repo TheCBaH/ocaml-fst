@@ -335,6 +335,62 @@ let check_seek t (name, select) =
               invalid "aligned_block -1" (fun () -> Fst.aligned_block t (-1));
               Result.map (fun () -> (!strings, !spans)) !result))
 
+(* S4: seeking in reverse, in random order and repeatedly, with several selections on one handle,
+   gives what a handle that has not seeked before gives. Returns the number of seeks compared. *)
+let check_seek_orders path =
+  let open_ () = Result.get_ok (Fst.open_file path) in
+  let seek_result t (select : int -> bool) k =
+    let c = ref [] in
+    match Fst.reader_at ~select t (tagged_sink c) ~block:k with
+    | Error e -> Error (Fst.Error.to_string e)
+    | Ok r -> (
+        match per_step r c with
+        | Error e -> Error (Fst.Error.to_string e)
+        | Ok steps -> Ok (List.concat (Array.to_list steps)))
+  in
+  let t = open_ () in
+  let nb = match Fst.blocks t with Ok bs -> Array.length bs | Error _ -> 0 in
+  let masks =
+    List.filter
+      (fun (n, _) -> List.mem n [ "all"; "odd"; "random 1"; "random 2" ])
+      (masks (handles t))
+  in
+  let masks = Array.of_list masks in
+  let expected = Hashtbl.create 64 in
+  let fresh m k =
+    match Hashtbl.find_opt expected (m, k) with
+    | Some r -> r
+    | None ->
+        let f = open_ () in
+        let r = seek_result f (snd masks.(m)) k in
+        Fst.close f;
+        Hashtbl.replace expected (m, k) r;
+        r
+  in
+  let st = Random.State.make [| nb |] in
+  let reverse = List.concat (List.init nb (fun i -> [ (0, nb - 1 - i) ])) in
+  let mixed =
+    List.init (3 * nb) (fun _ -> (Random.State.int st (Array.length masks), Random.State.int st nb))
+  in
+  let repeated = List.concat (List.init nb (fun k -> [ (1, k); (1, k); (0, k) ])) in
+  let n = ref 0 and result = ref (Ok ()) in
+  List.iter
+    (fun (name, seeks) ->
+      let t = open_ () in
+      List.iter
+        (fun (m, k) ->
+          incr n;
+          if seek_result t (snd masks.(m)) k <> fresh m k && !result = Ok () then
+            result :=
+              Error
+                (Printf.sprintf "%s order: seek %d, %s, differs from a fresh handle" name k
+                   (fst masks.(m))))
+        seeks;
+      Fst.close t)
+    [ ("reverse", reverse); ("random", mixed); ("repeated", repeated) ];
+  Fst.close t;
+  Result.map (fun () -> !n) !result
+
 (* [reader_at k] against libfst's time-limited read, only for the [k] where a time range start
    makes libfst skip exactly blocks 0..k-1 and no later block ([Time_range.start_for]). libfst
    starts such a read with empty chain tables and a forced frame, as [reader_at] does, and
@@ -520,6 +576,16 @@ let () =
             (masks (handles t));
           Fst.close t)
     (Common.files dir ".fst");
+  let orders = ref 0 in
+  List.iter
+    (fun f ->
+      match check_seek_orders (Filename.concat dir f) with
+      | Ok n -> orders := !orders + n
+      | Error e ->
+          incr failed;
+          Printf.printf "FAIL %s: %s\n" f e)
+    (Common.files dir ".fst");
+  Printf.printf "seek orders: %d seeks equal a fresh handle's\n" !orders;
   let reachable = ref 0 and seekable = ref 0 in
   List.iter
     (fun f ->

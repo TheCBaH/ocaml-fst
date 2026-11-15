@@ -430,6 +430,7 @@ type reader = {
   mutable mask : bool array option;
   blocks : File.block array;
   from : int;
+  first : int;  (** The only block whose frame is emitted without a seek. *)
   stop : int;
   mutable next : int;
   mutable prepass : int;  (** Earlier blocks whose strings the first step recovers. *)
@@ -439,7 +440,7 @@ type reader = {
 }
 
 (* Reads the blocks from index [from] up to, not including, [stop]. *)
-let start ?select ?packed ?(from = 0) ?stop ~(file : File.t) ~signals ~sink () =
+let start ?select ?packed ?(from = 0) ?first ?stop ~(file : File.t) ~signals ~sink () =
   let maxhandle = Array.length signals.lens in
   let st =
     {
@@ -463,6 +464,7 @@ let start ?select ?packed ?(from = 0) ?stop ~(file : File.t) ~signals ~sink () =
     mask = None;
     blocks = file.vc_blocks;
     from;
+    first = Option.value first ~default:from;
     stop = Option.value stop ~default:(Array.length file.vc_blocks);
     next = from;
     prepass = 0;
@@ -488,35 +490,70 @@ let rec step r =
     let i = r.next in
     r.next <- r.stop;
     block ~file:r.file ~signals:r.signals ~mask:r.mask ~packed:r.packed ~recovered:r.recovered
-      ~sink:r.sink r.st ~index:i ~first:(i = r.from) r.blocks.(i);
+      ~sink:r.sink r.st ~index:i ~first:(i = r.first) r.blocks.(i);
     r.recovered <- None;
     r.next <- i + 1;
     true
   end
 
 (* The last value of each selected string variable in the first [k] blocks: a block's frame does
-   not carry them. Only those handles' chains are read. *)
+   not carry them. Only those handles' chains are read. The state after each block is kept in
+   [file.seeks], so that a seek reads only the blocks since the nearest boundary an earlier seek
+   reached; a block that fails is not kept, and fails again. *)
 and strings_before r k =
   let lens = r.signals.lens in
   let want i = lens.(i) = 0 && match r.mask with None -> true | Some m -> m.(i) in
-  let any = ref false in
-  Array.iteri (fun i _ -> if want i then any := true) lens;
-  if not !any then []
+  let wanted = List.filter want (List.init (Array.length lens) Fun.id) in
+  if wanted = [] then []
   else begin
-    let last = Hashtbl.create 16 in
-    let sink =
-      {
-        ignore_sink with
-        varlen = (fun h b off len -> Hashtbl.replace last h (Bytes.sub_string b off len));
-      }
+    let cps =
+      match Hashtbl.find_opt r.file.seeks wanted with
+      | Some a -> a
+      | None ->
+          let a = Array.make (Array.length r.blocks + 1) None in
+          a.(0) <- Some File.start_checkpoint;
+          Hashtbl.replace r.file.seeks wanted a;
+          a
     in
-    let p =
-      start ~select:(fun h -> want (h - 1)) ~stop:k ~file:r.file ~signals:r.signals ~sink ()
-    in
-    while step p do
-      ()
-    done;
-    List.sort compare (Hashtbl.fold (fun h v acc -> (h, v) :: acc) last [])
+    let rec nearest j = match cps.(j) with Some c -> (j, c) | None -> nearest (j - 1) in
+    let j, cp = nearest k in
+    if j < k then begin
+      let last = ref cp.strings in
+      let sink =
+        {
+          ignore_sink with
+          varlen =
+            (fun h b off len -> last := File.Int_map.add h (Bytes.sub_string b off len) !last);
+        }
+      in
+      let p =
+        start
+          ~select:(fun h -> want (h - 1))
+          ~from:j ~first:0 ~stop:k ~file:r.file ~signals:r.signals ~sink ()
+      in
+      if cp.lengths_size > 0 then begin
+        p.st.table <- Array.make cp.lengths_size 0;
+        p.st.lengths <- Array.make cp.lengths_size 0;
+        List.iter (fun (i, v) -> p.st.lengths.(i) <- v) cp.negative
+      end;
+      let prev = ref cp in
+      for b = j + 1 to k do
+        ignore (step p);
+        let negative = ref [] in
+        Array.iteri (fun i v -> if to_int32 v < 0 then negative := (i, v) :: !negative) p.st.lengths;
+        let negative = List.rev !negative in
+        let cp =
+          {
+            File.strings = !last;
+            lengths_size = Array.length p.st.lengths;
+            negative = (if negative = !prev.negative then !prev.negative else negative);
+          }
+        in
+        cps.(b) <- Some cp;
+        prev := cp
+      done
+    end;
+    match cps.(k) with Some cp -> File.Int_map.bindings cp.strings | None -> assert false
   end
 
 (* Whether the first and the last time step of a block have changes, decoding every handle. *)

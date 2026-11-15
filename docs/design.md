@@ -73,9 +73,21 @@ is opened, and `Fst.blocks` then reads the first 16 bytes after the length for t
 and end times. `reader_at k` starts a `Vc.reader` at block `k`. A value change block's frame holds
 the value of every handle except the string variables at its start, so the first step emits the
 frame and, for the string variables, first runs a prepass: a second reader over blocks `0..k-1`
-that selects only the string handles and keeps the last value of each. The cost of a seek is that of reading every earlier block and decompressing the string
-handles' chains in it. `aligned_block` reads time tables only, and decodes a block when its first
-time equals the previous block's last.
+that selects only the string handles and keeps the last value of each.
+
+Seeks share checkpoints. `File.t` keeps, for each set of selected string handles, an array
+with the prepass state before every block, filled as seeks pass the boundaries: a seek to `k`
+resumes from the nearest known boundary `j <= k` and reads blocks `j..k-1` only, so seeks in any
+order read each earlier block at most once. A checkpoint holds the last value of each string
+handle that has one (a persistent map, so boundaries share their strings), the size of the chain
+length array and its negative entries (the stale lengths a block can inherit: a resumed prepass
+must see what a continuous one does), and nothing else. A block that fails is not recorded, so
+later seeks past it reread it and fail with the same error. The checkpoints belong to the handle,
+are single-domain like the rest of it, and are dropped by `close`. The cost of a first seek is
+that of reading every earlier block and decompressing the string handles' chains in it.
+
+`aligned_block` reads time tables only, and decodes a block when its first time equals the
+previous block's last.
 
 What `reader_at k` guarantees is what libfst's time-limited read (`fstReaderSetLimitTimeRange`)
 makes from block `k`: a `frame` call, a `time` call for the block's first time even if the
@@ -112,6 +124,8 @@ reals and strings go to the sink as before.
   that grows to what the selected chains decompress to (never beyond the block's declared memory
   plus 66 bytes, and only as data arrives). Per-handle arrays (`scatter`, `headptr`,
   `remaining`) are sized by the handle count and reused across blocks, as is the traversal buffer.
+- Seek checkpoints (see Seeking) are kept per handle until `close`: one small record per block
+  boundary reached, plus the string values, which boundaries share.
 - Sink arguments are views into those buffers, valid only during the call.
 
 ## libfst compatibility
