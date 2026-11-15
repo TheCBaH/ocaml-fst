@@ -27,8 +27,7 @@ type block = { typ : int; pos : int64; seclen : int64 }
 type t = {
   src : source;
   header : Header.t;
-  vc_blocks : block list;  (** The ones libfst iterates: before the first SKIP block. *)
-  vc_section_count : int;
+  vc_blocks : block array;  (** The ones libfst iterates: before the first SKIP block. *)
   geometry : block option;
   hier : block option;
   blackouts : (int64 * bool) array;
@@ -97,7 +96,7 @@ let parse_blackouts data b =
 
 let index src =
   let header = ref None and incomplete = ref false in
-  let vc = ref [] and vc_count = ref 0 and skip_seen = ref false in
+  let vc = ref [] and skip_seen = ref false in
   let geometry = ref None and hier = ref None and hier_kinds = ref (false, false) in
   let blackouts = ref [||] in
   let pos = ref 0L in
@@ -124,7 +123,6 @@ let index src =
           end
         end
         else if is_vc typ then begin
-          incr vc_count;
           if not (!skip_seen || Int64.equal seclen 0L) then vc := b :: !vc else skip_seen := true
         end
         else if typ = bl_skip then skip_seen := true
@@ -149,8 +147,7 @@ let index src =
       {
         src;
         header;
-        vc_blocks = List.rev !vc;
-        vc_section_count = !vc_count;
+        vc_blocks = Array.of_list (List.rev !vc);
         geometry = !geometry;
         hier;
         blackouts = !blackouts;
