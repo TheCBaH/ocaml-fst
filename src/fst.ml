@@ -68,8 +68,8 @@ let geometry t = Err.catch (fun () -> File.geometry t)
 
 let fold_hierarchy (t : t) ~init ~f =
   Err.catch (fun () ->
-      let base = match t.hier with Some b -> b.pos | None -> -1L in
-      H.fold ~base (File.hierarchy_data t) ~init ~f)
+      let data = File.hierarchy_data t in
+      H.fold ~handles:(H.count_handles data) data ~init ~f)
 
 type sink = Vc.sink = {
   time : int64 -> unit;

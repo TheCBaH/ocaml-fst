@@ -105,8 +105,7 @@ let definitions ~extensions (file : File.t) b =
   Printf.bprintf b "$timescale\n\t%s\n$end\n" (timescale h.timescale);
   let signals = File.signals_exn file in
   let data = File.hierarchy_data file in
-  let base = match file.hier with Some blk -> blk.pos | None -> -1L in
-  Hier.fold ~base data ~init:() ~f:(fun () e ->
+  Hier.fold ~handles:(Array.length signals) data ~init:() ~f:(fun () e ->
       match e with
       | Hier.Scope { scope_type; name; _ } ->
           let st = if scope_type >= Array.length Hier.scope_type_names then 0 else scope_type in

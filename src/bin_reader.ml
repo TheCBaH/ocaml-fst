@@ -2,16 +2,17 @@
 [@@@ai_provider "Anthropic, OpenAI"]
 
 (* Bounded reads over a string holding part of the file. [base] is the file offset of [s.[0]],
-   so errors report file offsets. Integers are big-endian and varints are LEB128, as in FST. *)
+   so errors report file offsets; a [hier] reader reads the decompressed hierarchy, and its errors report offsets in that. Integers are big-endian and varints are LEB128, as in FST. *)
 
-type t = { s : string; base : int64; mutable pos : int; lim : int }
+type t = { s : string; base : int64; mutable pos : int; lim : int; hier : bool }
 
-let create ?(base = 0L) ?(pos = 0) ?lim s =
+let create ?(base = 0L) ?(pos = 0) ?lim ?(hier = false) s =
   let lim = match lim with Some l -> l | None -> String.length s in
-  { s; base; pos; lim }
+  { s; base; pos; lim; hier }
 
 let file_offset t = Int64.add t.base (Int64.of_int t.pos)
-let truncated t what = Error.fail Truncated (file_offset t) "%s" what
+let fail_at t pos kind fmt = Error.fail ~hier:t.hier kind (Int64.add t.base (Int64.of_int pos)) fmt
+let truncated t what = fail_at t t.pos Truncated "%s" what
 let remaining t = t.lim - t.pos
 let need t n what = if n < 0 || n > t.lim - t.pos then truncated t what
 
@@ -47,7 +48,7 @@ let string t n what =
 (* LEB128 into 64 bits, at most 10 bytes; bits past 64 are dropped as libfst does. *)
 let varint t what =
   let rec go acc shift =
-    if shift > 63 then Error.fail Malformed (file_offset t) "%s: varint longer than 10 bytes" what;
+    if shift > 63 then fail_at t t.pos Malformed "%s: varint longer than 10 bytes" what;
     let b = u8 t what in
     let acc =
       if shift < 64 then Int64.logor acc (Int64.shift_left (Int64.of_int (b land 0x7f)) shift)
@@ -62,7 +63,7 @@ let varint32 t what = Int64.logand (varint t what) 0xFFFF_FFFFL
 
 let to_int t what v =
   if Int64.compare v 0L < 0 || Int64.compare v (Int64.of_int max_int) > 0 then
-    Error.fail Limit_exceeded (file_offset t) "%s: %Lu does not fit in an int" what v
+    fail_at t t.pos Limit_exceeded "%s: %Lu does not fit in an int" what v
   else Int64.to_int v
 
 let varint_int t what = to_int t what (varint t what)

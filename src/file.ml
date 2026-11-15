@@ -144,13 +144,12 @@ let index src =
   match !header with
   | None -> Error.fail Malformed 0L "no FST header"
   | Some header ->
-      let hier = match !hier_kinds with true, true -> None | _ -> !hier in
       {
         src;
         header;
         vc_blocks = Array.of_list (List.rev !vc);
         geometry = !geometry;
-        hier;
+        hier = (match !hier_kinds with true, true -> None | _ -> !hier);
         blackouts = !blackouts;
         signals = None;
         closed = false;
@@ -250,11 +249,7 @@ let signals t =
   | _ when t.closed -> Error closed_error
   | Some r -> r
   | None ->
-      let r =
-        Error.catch (fun () ->
-            let base = match t.hier with Some b -> b.pos | None -> -1L in
-            Hier.signals ~base (hierarchy_data t))
-      in
+      let r = Error.catch (fun () -> Hier.signals (hierarchy_data t)) in
       t.signals <- Some r;
       r
 

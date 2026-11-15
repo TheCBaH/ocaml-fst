@@ -24,9 +24,10 @@ module Error : sig
 
   val kind : t -> kind
 
-  val offset : t -> int64 option
-  (** The file offset of the offending block or field, when known. For hierarchy records, it is
-      the offset into the decompressed hierarchy, plus the block's offset. *)
+  val offset : t -> [ `File of int64 | `Hierarchy of int64 ] option
+  (** Where the error is, when known. [`File o] is the offset of the offending block or field in the
+      file. [`Hierarchy o] is an offset into the decompressed hierarchy, which no file offset
+      corresponds to. [None] when no position applies, such as an I/O error. *)
 
   val message : t -> string
   val pp : Format.formatter -> t -> unit
@@ -95,6 +96,8 @@ val geometry : t -> (int64 array, Error.t) result
     zero-length variables. *)
 
 val fold_hierarchy : t -> init:'a -> f:('a -> Hier.entry -> 'a) -> ('a, Error.t) result
+(** Folds over the hierarchy in declaration order. An alias to a handle that the hierarchy
+    does not declare is [Malformed]. *)
 
 type kind =
   | Bit  (** One bit: the sink's [bit]. *)

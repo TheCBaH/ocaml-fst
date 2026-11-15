@@ -167,6 +167,57 @@ let () =
   skipped "chains over the declared memory" (F.set_mem_required spec ~block:1 0L);
   skipped "inconsistent chain table" (F.set_chain_table spec ~block:1 "\000")
 
+(* D7: an alias names a handle that exists. *)
+let () =
+  let spec =
+    F.make
+      [ F.signal "a" F.Bit; F.signal "v" (F.Vector 4); F.signal ~alias:1 "a2" F.Bit ]
+      [ F.block ~times:[ 10L ] [ (0, 1, F.B '1') ] ]
+  in
+  let fold t = Fst.fold_hierarchy t ~init:0 ~f:(fun n _ -> n + 1) in
+  let t = open_ spec in
+  check "valid alias" (Result.is_ok (fold t) && Result.is_ok (Fst.Vcd.to_string t));
+  Fst.close t;
+  List.iter
+    (fun target ->
+      let t = open_ (F.set_alias_target spec ~signal:3 target) in
+      let name = Printf.sprintf "alias to handle %d" target in
+      expect (name ^ " fold_hierarchy") Fst.Error.Malformed (fun () -> Result.map ignore (fold t));
+      expect (name ^ " Vcd.to_string") Fst.Error.Malformed (fun () ->
+          Result.map ignore (Fst.Vcd.to_string t));
+      check (name ^ ": values still read") (Fst.iter_changes t sink = Ok ());
+      Fst.close t)
+    [ 3; 4; 1000; 1 lsl 29 ]
+
+(* D7: an error's offset says which coordinate system it is in. *)
+let () =
+  let spec =
+    F.make
+      [ F.signal "a" F.Bit; F.signal "v" (F.Vector 4); F.signal ~alias:1 "a2" F.Bit ]
+      [ F.block ~times:[ 10L; 20L ] [ (0, 1, F.B '1') ] ]
+  in
+  let offset name f ok =
+    match f () with
+    | Error e -> check (name ^ ": offset") (ok (Fst.Error.offset e))
+    | Ok _ -> check (name ^ ": Ok") false
+  in
+  let t = open_ (F.set_alias_target spec ~signal:3 9) in
+  offset "alias"
+    (fun () -> Fst.fold_hierarchy t ~init:() ~f:(fun () _ -> ()))
+    (fun o -> o = Some (`Hierarchy 19L));
+  Fst.close t;
+  let t = open_ (F.set_var_type (F.set_length spec ~signal:2 3) ~signal:2 3) in
+  offset "real length" (fun () -> Fst.signals t) (fun o -> o = Some (`Hierarchy 13L));
+  Fst.close t;
+  let t = open_ (F.set_trailer spec ~block:0 ~uclen:2 ~clen:100000 ~nitems:2) in
+  offset "trailer"
+    (fun () -> Fst.iter_changes t sink)
+    (function Some (`File _) -> true | _ -> false);
+  Fst.close t;
+  let t = open_ spec in
+  Fst.close t;
+  offset "closed" (fun () -> Fst.iter_changes t sink) (fun o -> o = None)
+
 (* D1: a sink's [Exit] reaches the caller. *)
 let () =
   let spec =
