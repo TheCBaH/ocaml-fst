@@ -31,6 +31,12 @@ let mask32 = if Sys.int_size > 32 then (1 lsl 32) - 1 else max_int
 let to_int32 v =
   if Sys.int_size > 32 then (v land mask32) - if v land (1 lsl 31) <> 0 then 1 lsl 32 else 0 else v
 
+(* The time delta of a bit change: libfst's [shcnt = 2 << (vli & 1)]. ocamlformat drops the
+   parentheses of [vli lsr (2 lsl ...)], so the shift is named. *)
+let bit_delta vli =
+  let shcnt = 2 lsl (vli land 1) in
+  vli lsr shcnt
+
 (* A chain table that is inconsistent with its block; [block] turns it into [Malformed]. *)
 exception Bad_chain
 
@@ -313,7 +319,7 @@ let block ~(file : File.t) ~signals ~mask ~packed ~recovered ~sink st ~index ~fi
         st.remaining.(i) <- dest;
         toffs := !toffs + dest;
         let vli, _ = varint_at st.trav st.headptr.(i) (Bytes.length st.trav) w offset in
-        let tdelta = if signals.lens.(i) = 1 then vli lsr 2 lsl (vli land 1) else vli lsr 1 in
+        let tdelta = if signals.lens.(i) = 1 then bit_delta vli else vli lsr 1 in
         if tdelta >= tc_items then Error.fail Malformed offset "%s: time index %d" w tdelta;
         st.scatter.(i) <- tc_head.(tdelta);
         tc_head.(tdelta) <- i + 1
@@ -396,7 +402,7 @@ let block ~(file : File.t) ~signals ~mask ~packed ~recovered ~sink st ~index ~fi
       st.scatter.(idx) <- 0;
       if st.remaining.(idx) > 0 then begin
         let vli, _ = varint_at trav st.headptr.(idx) tlim w off in
-        let tdelta = if shift1 then vli lsr 2 lsl (vli land 1) else vli lsr 1 in
+        let tdelta = if shift1 then bit_delta vli else vli lsr 1 in
         if tdelta + i >= tc_items then Error.fail Malformed off "%s: time index %d" w (tdelta + i);
         st.scatter.(idx) <- tc_head.(i + tdelta);
         tc_head.(i + tdelta) <- idx + 1
