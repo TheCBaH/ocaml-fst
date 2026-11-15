@@ -8,6 +8,7 @@ type signal = {
   kind : kind;
   alias : int option;
   decl_len : int option;
+  frame_len : int option;
   var_type : int option;
 }
 
@@ -31,7 +32,10 @@ type block = {
 
 type t = { timescale : int; scope : string; signals : signal list; blocks : block list }
 
-let signal ?alias name kind = { name; kind; alias; decl_len = None; var_type = None }
+let natural_len = function Bit -> 1 | Vector n -> n | Real -> 8 | String -> 0
+
+let signal ?alias name kind =
+  { name; kind; alias; decl_len = None; frame_len = None; var_type = None }
 
 let block ?start ?(frame = []) ?(aliases = []) ?max_handle ?typ ~times changes =
   let first = match times with t :: _ -> t | [] -> 0L in
@@ -61,6 +65,14 @@ let update_nth l n f =
 let set_length t ~signal n =
   { t with signals = update_nth t.signals (signal - 1) (fun s -> { s with decl_len = Some n }) }
 
+let set_declared_length t ~signal n =
+  {
+    t with
+    signals =
+      update_nth t.signals (signal - 1) (fun s ->
+          { s with decl_len = Some n; frame_len = Some (natural_len s.kind) });
+  }
+
 let set_var_type t ~signal ty =
   { t with signals = update_nth t.signals (signal - 1) (fun s -> { s with var_type = Some ty }) }
 
@@ -86,7 +98,7 @@ let set_trailer t ~block ~uclen ~clen ~nitems =
 let varint n =
   let b = Buffer.create 4 in
   let rec go n =
-    if n >= 0x80 then begin
+    if n < 0 || n >= 0x80 then begin
       Buffer.add_char b (Char.chr (n land 0x7f lor 0x80));
       go (n lsr 7)
     end
@@ -110,7 +122,6 @@ let pad s n c =
   if String.length s >= n then String.sub s 0 n else s ^ String.make (n - String.length s) c
 
 let rcv = "xzhuwl-?"
-let natural_len = function Bit -> 1 | Vector n -> n | Real -> 8 | String -> 0
 let length s = Option.value s.decl_len ~default:(natural_len s.kind)
 
 let var_type s =
@@ -174,7 +185,7 @@ let check_len what n l =
 
 (* A value's bytes in the frame, which has one fixed width per variable. *)
 let frame_value s v =
-  let l = length s in
+  let l = Option.value s.frame_len ~default:(length s) in
   match (s.kind, v) with
   | Bit, B c -> pad (String.make 1 c) l 'x'
   | Vector n, V x ->

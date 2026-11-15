@@ -187,9 +187,12 @@ let reserve st n =
     st.trav <- b
   end
 
-let scratch st n =
-  if n > Bytes.length st.scratch then
-    st.scratch <- Bytes.create (max n (2 * Bytes.length st.scratch));
+let scratch st ~off n =
+  if n > Bytes.length st.scratch then begin
+    if n > Sys.max_string_length then
+      Error.fail Limit_exceeded off "value changes: %d bits do not fit a string" n;
+    st.scratch <- Bytes.create (min Sys.max_string_length (max n (2 * Bytes.length st.scratch)))
+  end;
   st.scratch
 
 let block ~(file : File.t) ~signals ~mask ~packed ~recovered ~sink st ~index ~first (b : File.block)
@@ -240,7 +243,7 @@ let block ~(file : File.t) ~signals ~mask ~packed ~recovered ~sink st ~index ~fi
         end
       end
       else begin
-        if !offs + l > frame_uclen then Error.fail Malformed (at fpos) "frame: too short";
+        if l > frame_uclen - !offs then Error.fail Malformed (at fpos) "frame: too short";
         if selected idx then
           if not signals.reals.(idx) then sink.vector (idx + 1) mub !offs l
           else sink.real (idx + 1) (Header.float_at ~little_endian mu !offs)
@@ -299,9 +302,9 @@ let block ~(file : File.t) ~signals ~mask ~packed ~recovered ~sink st ~index ~fi
       let dpos = vr.pos in
       let dest, clen = if v <> 0 then (v, cl - skip) else (cl - skip, cl - skip) in
       if v = 0 && cl <= skip then bad "handle %d: chain shorter than its length" (i + 1);
-      if !need + dest > mem_limit then bad "handle %d: chains exceed the declared memory" (i + 1);
+      if dest > mem_limit - !need then bad "handle %d: chains exceed the declared memory" (i + 1);
       need := !need + dest;
-      if clen < 0 || dpos + clen > len then
+      if clen < 0 || clen > len - dpos then
         Error.fail Truncated (at dpos) "%s: handle %d" what (i + 1);
       if selected i then begin
         let w = "value changes" and offset = at dpos in
@@ -363,7 +366,7 @@ let block ~(file : File.t) ~signals ~mask ~packed ~recovered ~sink st ~index ~fi
         else if l = 0 then begin
           let vlen, skip2 = varint_at trav (hp + skip) tlim w off in
           let d = hp + skip + skip2 in
-          if d + vlen > tlim then Error.fail Truncated off "%s: handle %d" w (idx + 1);
+          if vlen > tlim - d then Error.fail Truncated off "%s: handle %d" w (idx + 1);
           if vli land 1 = 0 then sink.varlen (idx + 1) trav d vlen;
           (skip + skip2 + vlen, false)
         end
@@ -372,11 +375,11 @@ let block ~(file : File.t) ~signals ~mask ~packed ~recovered ~sink st ~index ~fi
           if not signals.reals.(idx) then
             if vli land 1 = 0 then begin
               let n = ((l - 1) / 8) + 1 in
-              if d + n > tlim then Error.fail Truncated off "%s: handle %d" w (idx + 1);
+              if n > tlim - d then Error.fail Truncated off "%s: handle %d" w (idx + 1);
               (match packed with
               | Some f -> f (idx + 1) trav d l
               | None ->
-                  let sb = scratch st l in
+                  let sb = scratch st ~off l in
                   for j = 0 to l - 1 do
                     let byte = Char.code (Bytes.unsafe_get trav (d + (j lsr 3))) in
                     Bytes.unsafe_set sb j
@@ -386,7 +389,7 @@ let block ~(file : File.t) ~signals ~mask ~packed ~recovered ~sink st ~index ~fi
               (skip + n, false)
             end
             else begin
-              if d + l > tlim then Error.fail Truncated off "%s: handle %d" w (idx + 1);
+              if l > tlim - d then Error.fail Truncated off "%s: handle %d" w (idx + 1);
               sink.vector (idx + 1) trav d l;
               (skip + l, false)
             end

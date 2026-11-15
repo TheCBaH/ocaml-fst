@@ -1,0 +1,9 @@
+; Direct tests of [header], [blackouts] and [geometry]: against the VCD and the hierarchy of the
+; generated corpus, and against hand-written sections of fixture files.
+
+(test
+ (name test_meta)
+ (libraries fst fst_fixture)
+ (deps %{project_root}/test/reference/corpus)
+ (action
+  (run %{test} %{project_root}/test/reference/corpus)))

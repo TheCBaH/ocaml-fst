@@ -4,7 +4,7 @@
 
 (executables
  (names test_corpus robust digests)
- (libraries fst time_range))
+ (libraries fst fst_fixture time_range))
 
 (rule
  (alias runtest)
@@ -21,7 +21,8 @@
  (alias runtest)
  (deps
   %{project_root}/test/reference/corpus
-  (glob_files %{project_root}/vendor/libfst/tests/data/malformed/*.fst))
+  (glob_files %{project_root}/vendor/libfst/tests/data/malformed/*.fst)
+  (glob_files %{project_root}/vendor/libfst/tests/data/malformed/*.hier))
  (action
   (run
    %{exe:robust.exe}

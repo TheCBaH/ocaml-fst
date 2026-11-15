@@ -128,7 +128,8 @@ val fold_hierarchy : t -> init:'a -> f:('a -> Hier.entry -> 'a) -> ('a, Error.t)
 type kind =
   | Bit  (** One bit: the sink's [bit]. *)
   | Vector  (** More than one bit: [vector]. *)
-  | Port  (** A [port] variable of more than one bit: [vector], as 3n+2 characters. *)
+  | Port
+      (** A [port] variable: [vector], as 3n+2 characters, or [bit] if its declared length is 1. *)
   | Real  (** [real]. *)
   | String  (** Zero length: [varlen]. *)
 
