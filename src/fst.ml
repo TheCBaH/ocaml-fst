@@ -200,8 +200,8 @@ module Private = struct
     | Some n -> Some (Bytes.sub_string dst 0 n)
     | None -> None
 
-  let of_reader ~length ~read =
-    Err.catch (fun () -> File.scan { File.length; read; close = ignore })
+  let of_reader ?(close = ignore) ~length ~read () =
+    Err.catch (fun () -> File.scan { File.length; read; close })
 
   let vcd_id = V.id
   let timescale = V.timescale

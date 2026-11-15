@@ -124,4 +124,36 @@ let () =
     (be64 patched tr = 7 && be64 patched (tr + 8) = 9 && be64 patched (tr + 16) = 11);
   ignore (read (F.build (F.set_chain_dest spec ~block:0 ~handle:2 7)));
   ignore (read (F.build (F.set_chain_table spec ~block:0 "\001")));
+  (* A source is closed exactly once, whatever the outcome of opening it. *)
+  let wrapped data =
+    let b = Buffer.create (String.length data + 17) in
+    Buffer.add_char b '\xfe';
+    Buffer.add_int64_be b (Int64.of_int (String.length data + 8));
+    Buffer.add_int64_be b (Int64.of_int (String.length data));
+    Buffer.add_string b data;
+    Buffer.contents b
+  in
+  let counted name data ~opens ~after_close =
+    let closes = ref 0 in
+    let length = Int64.of_int (String.length data) in
+    let read pos len =
+      let p = Int64.to_int pos in
+      if p >= String.length data then "" else String.sub data p (min len (String.length data - p))
+    in
+    let r = Fst.Private.of_reader ~close:(fun () -> incr closes) ~length ~read () in
+    (match r with
+    | Ok t ->
+        check (name ^ ": opened") opens;
+        if opens then begin
+          check (Printf.sprintf "%s: closes after open = %d" name !closes) (!closes = after_close);
+          Fst.close t
+        end
+    | Error _ -> check (name ^ ": rejected") (not opens));
+    check (Printf.sprintf "%s: closes = %d" name !closes) (!closes = 1)
+  in
+  counted "plain" s ~opens:true ~after_close:0;
+  counted "wrapped" (wrapped s) ~opens:true ~after_close:1;
+  counted "wrapped truncated" (String.sub (wrapped s) 0 20) ~opens:false ~after_close:0;
+  counted "wrapped, bad inner" (wrapped (String.sub s 0 40)) ~opens:false ~after_close:0;
+  counted "no header" "" ~opens:false ~after_close:0;
   if !failures > 0 then exit 1

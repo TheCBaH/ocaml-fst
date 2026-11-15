@@ -206,8 +206,14 @@ end
 module Private : sig
   val fastlz : string -> size:int -> string option
 
-  val of_reader : length:int64 -> read:(int64 -> int -> string) -> (t, Error.t) result
-  (** A file over [read pos len], which returns [len] bytes or fewer at the end. *)
+  val of_reader :
+    ?close:(unit -> unit) ->
+    length:int64 ->
+    read:(int64 -> int -> string) ->
+    unit ->
+    (t, Error.t) result
+  (** A file over [read pos len], which returns [len] bytes or fewer at the end. [close] is
+      called exactly once: by {!close}, or by [of_reader] itself if opening fails. *)
 
   val vcd_id : int -> string
   val timescale : int -> string

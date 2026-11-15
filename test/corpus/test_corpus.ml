@@ -319,7 +319,7 @@ let check_index path =
         s
       end
     in
-    match Fst.Private.of_reader ~length:(Int64.of_int (String.length data)) ~read with
+    match Fst.Private.of_reader ~length:(Int64.of_int (String.length data)) ~read () with
     | Error _ -> Ok ()
     | Ok t -> (
         count := 0;

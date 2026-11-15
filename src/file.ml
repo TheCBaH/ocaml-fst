@@ -94,9 +94,7 @@ let parse_blackouts data b =
       t := Int64.add !t (Bin_reader.varint r what);
       (!t, on))
 
-let scan src =
-  let first = src.read 0L 1 in
-  let src = if first = "\xfe" then of_string (gunzip_file src) else src in
+let index src =
   let header = ref None and incomplete = ref false in
   let vc = ref [] and vc_count = ref 0 and skip_seen = ref false in
   let geometry = ref None and hier = ref None and hier_kinds = ref (false, false) in
@@ -156,6 +154,26 @@ let scan src =
         hier;
         blackouts = !blackouts;
       }
+
+(* Takes ownership of [src]: it is closed here if the file cannot be opened, and as soon as a
+   compressed wrapper has been inflated into memory. *)
+let scan src =
+  match
+    if src.read 0L 1 = "\xfe" then begin
+      let inflated = of_string (gunzip_file src) in
+      src.close ();
+      inflated
+    end
+    else src
+  with
+  | exception e ->
+      src.close ();
+      raise e
+  | src -> (
+      try index src
+      with e ->
+        src.close ();
+        raise e)
 
 (* Widths per handle: reals are 0, zero-length variables 0xFFFFFFFF. *)
 let geometry t =
