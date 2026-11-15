@@ -85,6 +85,7 @@ let signals t =
   let base = match t.File.hier with Some b -> b.pos | None -> -1L in
   H.fold ~base (File.hierarchy_data t) ~init:() ~f:(fun () -> function
     | H.Var { var_type; length; alias = false; _ } ->
+        H.check_real ~base ~var_type ~length;
         lens := length :: !lens;
         reals := H.is_real var_type :: !reals
     | _ -> ());

@@ -1,0 +1,6 @@
+; Fixtures that aim at one defect each: hostile fields in otherwise valid files, and a sink
+; that raises.
+
+(test
+ (name test_defects)
+ (libraries fst fst_fixture))

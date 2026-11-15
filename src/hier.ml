@@ -23,6 +23,11 @@ let vt_string = 21
 let vt_shortreal = 29
 let is_real t = t = vt_real || t = vt_real_parameter || t = vt_realtime || t = vt_shortreal
 
+(* The traversal reads 8 bytes per real value. *)
+let check_real ~base ~var_type ~length =
+  if is_real var_type && length <> 8 then
+    Error.fail Malformed base "real variable of %d bytes" length
+
 (* libfst's longest kept name (FST_ID_NAM_ATTR_SIZ). *)
 let max_name = 65536 + 4096
 
