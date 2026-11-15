@@ -245,15 +245,15 @@ let hierarchy_data t =
         Codec.lz4 ~what ~offset:off mid ~off:0 ~len:uclen2 ~size:uclen
       end
 
-(* The variables' kinds and declared lengths, the one place a real's length is checked; the
-   outcome, an error included, is kept. *)
+(* The variables' kinds and declared lengths, the one place a real's length is checked. The
+   outcome is kept, a malformed hierarchy included, but not an I/O error, which may pass. *)
 let signals t =
   match t.signals with
   | _ when t.closed -> Error closed_error
   | Some r -> r
   | None ->
       let r = Error.catch (fun () -> Hier.signals (hierarchy_data t)) in
-      t.signals <- Some r;
+      (match r with Error e when Error.kind e = Io -> () | _ -> t.signals <- Some r);
       r
 
 let signals_exn t = match signals t with Ok a -> a | Error e -> raise (Error.E e)

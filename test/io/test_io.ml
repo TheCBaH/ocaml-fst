@@ -79,6 +79,16 @@ let () =
   | Ok t ->
       fail := true;
       all_fail "read fails" t);
+  (* A transient failure of the first hierarchy read is not kept. *)
+  let fail = ref false in
+  (match reader ~fail data with
+  | Error e -> check ("open: " ^ Fst.Error.to_string e) false
+  | Ok t ->
+      fail := true;
+      is_io "signals while the disk fails" (Result.map ignore (Fst.signals t));
+      fail := false;
+      check "signals after the disk recovers" (Result.is_ok (Fst.signals t));
+      check "iter_changes after the disk recovers" (Fst.iter_changes t sink = Ok ()));
   (* A FIFO is not seekable, so it has no length. The read end opens without a writer because
      the read-write descriptor keeps it busy. *)
   let dir = Filename.temp_file "io" ".d" in

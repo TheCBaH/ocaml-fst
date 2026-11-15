@@ -112,8 +112,9 @@ val signals : t -> ((kind * int) array, Error.t) result
 (** The kind and declared length of each variable that is not an alias, indexed by handle minus
     one: bits, 3n+2 for a port, 8 for a real, 0 for a string. Its length is the number of
     handles, and the sink's calls for a handle are those of its kind. The hierarchy is read on
-    the first call and the outcome, an error included, is kept: later calls return the very
-    same value. A real whose declared length is not 8 is [Malformed], here and so from
+    the first call and the outcome is kept for the life of the handle: later calls return the very
+    same value. An [Io] error is the exception: it is not kept, so a later call reads the
+    hierarchy again. A real whose declared length is not 8 is [Malformed], here and so from
     every function that reads values. *)
 
 type sink = {
