@@ -32,6 +32,7 @@ type t = {
   hier : block option;
   blackouts : (int64 * bool) array;
   mutable signals : ((Hier.kind * int) array, Error.t) result option;
+  mutable closed : bool;
 }
 
 let of_string s =
@@ -152,6 +153,7 @@ let index src =
         hier;
         blackouts = !blackouts;
         signals = None;
+        closed = false;
       }
 
 (* Closes the underlying source once, however often it is called; later reads fail. *)
@@ -189,8 +191,16 @@ let scan src =
         src.close ();
         raise e)
 
+let closed_error = Error.make Io "file is closed"
+let check_open t = if t.closed then raise (Error.E closed_error)
+
+let close t =
+  t.closed <- true;
+  t.src.close ()
+
 (* Widths per handle: reals are 0, zero-length variables 0xFFFFFFFF. *)
 let geometry t =
+  check_open t;
   match t.geometry with
   | None -> [||]
   | Some b ->
@@ -212,6 +222,7 @@ let geometry t =
 
 let hierarchy_data t =
   let what = "hierarchy" in
+  check_open t;
   match t.hier with
   | None -> Error.fail Malformed (-1L) "no hierarchy block"
   | Some b ->
@@ -236,6 +247,7 @@ let hierarchy_data t =
    outcome, an error included, is kept. *)
 let signals t =
   match t.signals with
+  | _ when t.closed -> Error closed_error
   | Some r -> r
   | None ->
       let r =

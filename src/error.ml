@@ -7,6 +7,7 @@ type t = { kind : kind; offset : int64; message : string }
 exception E of t
 
 let fail kind offset fmt = Printf.ksprintf (fun message -> raise (E { kind; offset; message })) fmt
+let make kind message = { kind; offset = -1L; message }
 let kind t = t.kind
 let offset t = if Int64.compare t.offset 0L < 0 then None else Some t.offset
 let message t = t.message
@@ -25,8 +26,4 @@ let pp ppf t =
   | None -> Format.fprintf ppf "fst: %s: %s" (kind_to_string t.kind) t.message
 
 let to_string t = Format.asprintf "%a" pp t
-
-let catch f =
-  try Ok (f ()) with
-  | E e -> Error e
-  | Sys_error message -> Error { kind = Io; offset = -1L; message }
+let catch f = try Ok (f ()) with E e -> Error e | Sys_error message -> Error (make Io message)

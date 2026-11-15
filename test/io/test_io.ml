@@ -35,26 +35,32 @@ let is_io name = function
   | Error e -> check (name ^ ": " ^ Fst.Error.to_string e) (Fst.Error.kind e = Fst.Error.Io)
   | Ok _ -> check (name ^ ": expected an I/O error") false
 
-let drain r =
-  let rec go () =
-    match Fst.step r with Ok true -> go () | Ok false -> Ok () | Error e -> Error e
-  in
-  go ()
+let guard name what f =
+  match f () with
+  | r -> is_io (name ^ " " ^ what) r
+  | exception e -> check (name ^ " " ^ what ^ " raised " ^ Printexc.to_string e) false
 
 (* Every entry point that reads the source, each as an [Error Io] and not an exception. *)
 let all_fail name t =
-  let guard what f =
-    match f () with
-    | r -> is_io (name ^ " " ^ what) r
-    | exception e -> check (name ^ " " ^ what ^ " raised " ^ Printexc.to_string e) false
-  in
+  let guard = guard name in
   guard "blocks" (fun () -> Result.map ignore (Fst.blocks t));
   guard "fold_hierarchy" (fun () -> Fst.fold_hierarchy t ~init:() ~f:(fun () _ -> ()));
   guard "iter_changes" (fun () -> Fst.iter_changes t sink);
-  guard "reader" (fun () -> Result.bind (Fst.reader t sink) drain);
-  guard "reader_at" (fun () -> Result.bind (Fst.reader_at t sink ~block:1) drain);
+  guard "reader" (fun () -> Result.map ignore (Fst.reader t sink));
+  guard "reader_at" (fun () -> Result.map ignore (Fst.reader_at t sink ~block:1));
   guard "aligned_block" (fun () -> Result.map ignore (Fst.aligned_block t 1));
+  guard "aligned_block 0" (fun () -> Result.map ignore (Fst.aligned_block t 0));
   guard "Vcd.to_string" (fun () -> Result.map ignore (Fst.Vcd.to_string t))
+
+(* A closed file refuses everything that takes it, whether or not its tables are cached. *)
+let closed_fail name t r =
+  all_fail name t;
+  let guard = guard name in
+  guard "signals" (fun () -> Result.map ignore (Fst.signals t));
+  guard "geometry" (fun () -> Result.map ignore (Fst.geometry t));
+  guard "Vcd.write" (fun () ->
+      Out_channel.with_open_bin Filename.null (fun oc -> Fst.Vcd.write t oc));
+  Option.iter (fun r -> guard "step" (fun () -> Result.map ignore (Fst.step r))) r
 
 let reader ~fail s =
   let length = Int64.of_int (String.length s) in
@@ -96,14 +102,23 @@ let () =
   Unix.close hold;
   Sys.remove fifo;
   Unix.rmdir dir;
-  (* Use after close. *)
+  (* Use after close, with the signal table cached or not. *)
   let path = temp_file data in
-  (match Fst.open_file path with
-  | Error e -> check ("open_file: " ^ Fst.Error.to_string e) false
-  | Ok t ->
-      check "reads before close" (Result.is_ok (Fst.Vcd.to_string t));
-      Fst.close t;
-      Fst.close t;
-      all_fail "after close" t);
+  List.iter
+    (fun (name, warm) ->
+      match Fst.open_file path with
+      | Error e -> check ("open_file: " ^ Fst.Error.to_string e) false
+      | Ok t ->
+          let r =
+            if warm then begin
+              check "reads before close" (Result.is_ok (Fst.Vcd.to_string t));
+              Result.to_option (Fst.reader t sink)
+            end
+            else None
+          in
+          Fst.close t;
+          Fst.close t;
+          closed_fail name t r)
+    [ ("after close", true); ("after close, cold", false) ];
   Sys.remove path;
   if !failures > 0 then exit 1

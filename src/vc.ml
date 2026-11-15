@@ -456,6 +456,7 @@ let start ?select ?packed ?(from = 0) ?stop ~(file : File.t) ~signals ~sink () =
 (* No block is pending while one is decoded, so that an exception, ours or the sink's, ends the
    iteration. *)
 let rec step r =
+  File.check_open r.file;
   (match r.select with
   | Some f ->
       r.mask <- Some (Array.init (Array.length r.signals.lens) (fun i -> f (i + 1)));

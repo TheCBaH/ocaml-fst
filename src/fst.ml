@@ -61,7 +61,7 @@ let open_file path =
         raise e)
 
 let of_string s = Err.catch (fun () -> File.scan (File.of_string s))
-let close (t : t) = t.src.close ()
+let close = File.close
 let header (t : t) = t.header
 let blackouts (t : t) = Array.to_list t.blackouts
 let geometry t = Err.catch (fun () -> File.geometry t)
@@ -99,6 +99,7 @@ type block = { start_time : int64; end_time : int64; pos : int }
 
 let blocks (t : t) =
   Err.catch (fun () ->
+      File.check_open t;
       Array.map
         (fun (b : File.block) ->
           let start_time, end_time = File.block_times t.src b in
@@ -111,11 +112,13 @@ let check_block (t : t) k =
 
 let reader_at ?select ?packed t sink ~block =
   Err.catch (fun () ->
+      File.check_open t;
       check_block t block;
       Vc.start_at ?select ?packed ~file:t ~signals:(tables t) ~sink ~block ())
 
 let aligned_block (t : t) k =
   Err.catch (fun () ->
+      File.check_open t;
       check_block t k;
       let bs = t.vc_blocks in
       let ends = Array.make (Array.length bs) None in
