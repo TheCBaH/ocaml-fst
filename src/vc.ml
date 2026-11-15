@@ -61,6 +61,10 @@ let varint_at b pos lim what off =
   in
   go 0 0 pos
 
+(* Entry [b] is the eight characters '0'/'1' of byte [b], most significant bit first. *)
+let expand_tbl =
+  String.init 2048 (fun i -> Char.chr (((i lsr 3) lsr (7 - (i land 7))) land 1 lor 0x30))
+
 (* Over a string with a NUL past the end, as libfst's chain table buffer has. *)
 let svarint_str s pos =
   let rec go acc shift p =
@@ -380,7 +384,12 @@ let block ~(file : File.t) ~signals ~mask ~packed ~recovered ~sink st ~index ~fi
               | Some f -> f (idx + 1) trav d l
               | None ->
                   let sb = scratch st ~off l in
-                  for j = 0 to l - 1 do
+                  let full = l lsr 3 in
+                  for j = 0 to full - 1 do
+                    let byte = Char.code (Bytes.unsafe_get trav (d + j)) in
+                    Bytes.set_int64_ne sb (j * 8) (String.get_int64_ne expand_tbl (byte * 8))
+                  done;
+                  for j = full * 8 to l - 1 do
                     let byte = Char.code (Bytes.unsafe_get trav (d + (j lsr 3))) in
                     Bytes.unsafe_set sb j
                       (Char.unsafe_chr ((byte lsr (7 - (j land 7))) land 1 lor 0x30))
