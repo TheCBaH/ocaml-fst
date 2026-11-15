@@ -245,6 +245,42 @@ let () =
   Fst.close t;
   offset "closed" (fun () -> Fst.iter_changes t sink) (fun o -> o = None)
 
+(* D7: the length of a compressed wrapper is checked against the platform's int, not wrapped. *)
+let () =
+  let head =
+    let b = Bytes.make 17 '\000' in
+    Bytes.set b 0 '\xfe';
+    Bytes.set_int64_be b 1 100L;
+    Bytes.set_int64_be b 9 100L;
+    Bytes.to_string b
+  in
+  let wrapped length =
+    let read pos len =
+      let p = Int64.to_int pos in
+      if p >= String.length head then "" else String.sub head p (min len (String.length head - p))
+    in
+    Fst.Private.of_reader ~length ~read ()
+  in
+  let big =
+    (if Sys.int_size < 32 then [ 0x8000_0064L ] else []) @ [ Int64.add (Int64.of_int max_int) 100L ]
+  in
+  List.iter
+    (fun length ->
+      let name = Printf.sprintf "wrapper of %Ld bytes" length in
+      match wrapped length with
+      | Error e ->
+          let m = Fst.Error.message e in
+          let fits = ref false in
+          String.iteri
+            (fun i _ ->
+              if i + 7 <= String.length m && String.sub m i 7 = "fit in " then fits := true)
+            m;
+          check
+            (name ^ ": Limit_exceeded, does not fit: " ^ m)
+            (Fst.Error.kind e = Limit_exceeded && !fits)
+      | Ok _ -> check (name ^ ": Ok") false)
+    big
+
 (* D1: a sink's [Exit] reaches the caller. *)
 let () =
   let spec =

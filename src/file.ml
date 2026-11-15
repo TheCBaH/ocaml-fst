@@ -81,7 +81,7 @@ let gunzip_file src =
   let seclen = Bin_reader.u64 r what in
   let uclen = Bin_reader.to_int r what (Bin_reader.u64 r what) in
   if Int64.equal seclen 0L then Error.fail Malformed 1L "%s: unfinished" what;
-  let rest = Int64.to_int (Int64.sub src.length 17L) in
+  let rest = Bin_reader.to_int r what (Int64.sub src.length 17L) in
   let data = read_exact src 0L (17 + rest) what in
   Codec.gzip ~what ~offset:17L data ~off:17 ~len:rest ~size:uclen
 
