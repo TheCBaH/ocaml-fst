@@ -124,6 +124,9 @@ let () =
            | Fst.Hier.Var { length; handle; alias; _ } -> (length, handle, alias) :: acc | _ -> acc))
   in
   check "set_length" (List.mem (4, 4, false) (hier (F.set_length spec ~signal:4 4)));
+  check "set_declared_length"
+    (List.mem (100, 2, false) (hier (F.set_declared_length spec ~signal:2 100))
+    && String.length (F.build (F.set_declared_length spec ~signal:2 100)) = String.length s);
   check "set_alias_target" (List.mem (1, 3, true) (hier (F.set_alias_target spec ~signal:6 3)));
   let pos = Int64.to_int (ok "blocks" (Fst.blocks t)).(1).pos in
   let be64 s p = Int64.to_int (String.get_int64_be s p) in

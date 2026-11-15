@@ -9,6 +9,7 @@ type signal = {
   kind : kind;
   alias : int option;  (** The 1-based handle this one aliases; [kind] is then only the type. *)
   decl_len : int option;  (** Overrides the hierarchy's declared length. *)
+  frame_len : int option;  (** Overrides the variable's width in the frame. *)
   var_type : int option;  (** Overrides the hierarchy's variable type. *)
 }
 
@@ -56,6 +57,10 @@ val build : t -> string
 val set_length : t -> signal:int -> int -> t
 (** The hierarchy's declared length of the [signal]th variable (aliases included, 1-based).
     Reals take that many bytes in the frame. *)
+
+val set_declared_length : t -> signal:int -> int -> t
+(** As {!set_length}, but the frame keeps the variable's own width, so the length may be any
+    value, including negative ones, which are written as the unsigned varint they wrap to. *)
 
 val set_var_type : t -> signal:int -> int -> t
 (** The hierarchy's variable type of the [signal]th variable (aliases included, 1-based), e.g.
