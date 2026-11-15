@@ -205,6 +205,7 @@ end
 (* Internals for the tests. *)
 module Private : sig
   val fastlz : string -> size:int -> string option
+  val zlib : string -> off:int -> len:int -> size:int -> (string, Error.t) result
 
   val of_reader :
     ?close:(unit -> unit) ->

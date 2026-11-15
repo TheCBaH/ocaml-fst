@@ -96,4 +96,23 @@ let () =
   chain "chain offsets" "\x03\x05\x03" true (Some ([| 1; 3; 4 |], [| 2; 1; 6 |]));
   chain "chain overrun" "\x0c" false None;
   chain "chain unterminated alias" "\x03\x00" false None;
+  (* A zlib section inside a larger buffer, as value change blocks store them. *)
+  let plain = String.concat "" (List.init 20 (fun _ -> "abcabcabc")) ^ "end" in
+  let z = "\x78\xda\x4b\x4c\x4a\x4e\x1c\x6a\x28\x35\x2f\x05\x00\x2e\xe1\x46\x20" in
+  let zlib name s ~off expected =
+    let got =
+      match P.zlib s ~off ~len:(String.length z) ~size:(String.length plain) with
+      | Ok d -> Some d
+      | Error _ -> None
+    in
+    check name (opt qstr) expected got
+  in
+  List.iter
+    (fun off ->
+      let s = String.make off '\xaa' ^ z ^ "tail" in
+      zlib (Printf.sprintf "zlib at %d" off) s ~off (Some plain))
+    [ 0; 1; 7; 100 ];
+  let bad = Bytes.of_string ("\xaa\xaa" ^ z) in
+  Bytes.set bad (Bytes.length bad - 1) '\x21';
+  zlib "zlib bad checksum" (Bytes.to_string bad) ~off:2 None;
   if !failures > 0 then exit 1

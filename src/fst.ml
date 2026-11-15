@@ -197,6 +197,9 @@ module Private = struct
     | Some n -> Some (Bytes.sub_string dst 0 n)
     | None -> None
 
+  let zlib s ~off ~len ~size =
+    Err.catch (fun () -> Codec.zlib ~what:"zlib" ~offset:0L s ~off ~len ~size)
+
   let of_reader ?(close = ignore) ~length ~read () =
     Err.catch (fun () -> File.scan { File.length; read; close })
 
