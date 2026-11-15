@@ -155,14 +155,29 @@ let index src =
         blackouts = !blackouts;
       }
 
+(* Closes the underlying source once, however often it is called; later reads fail. *)
+let guarded src =
+  let closed = ref false in
+  {
+    src with
+    read = (fun pos len -> if !closed then Error.fail Io pos "file is closed" else src.read pos len);
+    close =
+      (fun () ->
+        if not !closed then begin
+          closed := true;
+          src.close ()
+        end);
+  }
+
 (* Takes ownership of [src]: it is closed here if the file cannot be opened, and as soon as a
    compressed wrapper has been inflated into memory. *)
 let scan src =
+  let src = guarded src in
   match
     if src.read 0L 1 = "\xfe" then begin
       let inflated = of_string (gunzip_file src) in
       src.close ();
-      inflated
+      guarded inflated
     end
     else src
   with

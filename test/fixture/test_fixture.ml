@@ -146,6 +146,7 @@ let () =
         check (name ^ ": opened") opens;
         if opens then begin
           check (Printf.sprintf "%s: closes after open = %d" name !closes) (!closes = after_close);
+          Fst.close t;
           Fst.close t
         end
     | Error _ -> check (name ^ ": rejected") (not opens));

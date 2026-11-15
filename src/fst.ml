@@ -52,12 +52,9 @@ end
 
 type t = File.t
 
-let io_error fmt =
-  Printf.ksprintf (fun m -> Err.E { Err.kind = Err.Io; offset = -1L; message = m }) fmt
-
 let open_file path =
   Err.catch (fun () ->
-      let ic = try open_in_bin path with Sys_error m -> raise (io_error "%s" m) in
+      let ic = open_in_bin path in
       try File.scan (File.of_channel ic)
       with e ->
         close_in_noerr ic;

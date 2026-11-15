@@ -1,0 +1,6 @@
+; Sources that fail: a FIFO has no length, and a read can fail at any time. unix is used by the
+; tests only.
+
+(test
+ (name test_io)
+ (libraries fst fst_fixture unix))
