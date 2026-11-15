@@ -168,15 +168,12 @@ let aligned_block (t : t) k =
 
 module Vcd = struct
   let write ?(extensions = false) t oc =
-    Err.catch (fun () ->
-        V.write ~extensions t (Buffer.create 131072) ~flush:(fun b ->
-            Buffer.output_buffer oc b;
-            Buffer.clear b))
+    Err.catch (fun () -> V.write ~extensions t ~emit:(output oc))
 
   let to_string ?(extensions = false) t =
     Err.catch (fun () ->
         let b = Buffer.create 131072 in
-        V.write ~extensions t b ~flush:ignore;
+        V.write ~extensions t ~emit:(Buffer.add_subbytes b);
         Buffer.contents b)
 
   let id = V.id
