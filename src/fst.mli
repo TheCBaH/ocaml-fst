@@ -7,8 +7,32 @@
 
     All four compressions are decoded in OCaml: zlib and gzip with
     {{:https://erratique.ch/software/zipc}zipc}, LZ4 with
-    {{:https://github.com/TheCBaH/ocaml-unlz4}unlz4}, and FastLZ here. Malformed input yields an
-    {!Error.t}, never an exception. *)
+    {{:https://github.com/TheCBaH/ocaml-unlz4}unlz4}, and FastLZ here.
+
+    {1 Errors}
+
+    Damaged input, and a file or read that fails, yield an {!Error.t}: a damaged value change block
+    is [Malformed], never skipped, and the file is not read past it. Exceptions are for what is not
+    input: [Invalid_argument] for a bad argument ({!reader_at}, {!aligned_block}), and whatever a
+    sink raises, which propagates to the caller of {!iter_changes} or {!step}.
+
+    {1 Domains and threads}
+
+    Nothing here is thread-safe. A {!t}, the {!reader}s made from it and their sinks belong to one
+    domain or thread at a time: the handle caches {!signals} and reads its source through a
+    position the readers share. Separate handles share no state and may be used from separate
+    domains.
+
+    {1 Lifetime}
+
+    {!close} ends the use of a handle, and is harmless when repeated. Afterwards every function
+    that takes the handle, or a {!reader} made from it, returns [Error Io] ("file is closed");
+    this holds even where the answer is cached, and the sink gets no call. {!header} and
+    {!blackouts} return what was read when the file was opened, so they still work. A {!reader}
+    reads from the handle when stepped, so one that outlives {!close} fails at its next {!step},
+    and dropping one needs no cleanup. The
+    bytes passed to a sink are valid only during the call. An exception from a sink ends that
+    {!iter_changes}, or that reader's steps, but leaves the handle usable. *)
 
 (** Errors. *)
 module Error : sig
@@ -86,7 +110,7 @@ val open_file : string -> (t, Error.t) result
 val of_string : string -> (t, Error.t) result
 
 val close : t -> unit
-(** Closes the file of {!open_file}. *)
+(** Closes the file of {!open_file}; see Lifetime above. *)
 
 val header : t -> Header.t
 

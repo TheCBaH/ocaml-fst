@@ -12,8 +12,11 @@ writes with `--trace-fst`, and an `fst2vcd` that converts it to VCD byte for byt
   blackouts, attributes, aliases, reals and strings.
 - **Pure OCaml**: zlib and gzip through [zipc](https://erratique.ch/software/zipc), LZ4 through
   [unlz4](https://github.com/TheCBaH/ocaml-unlz4), FastLZ here. No C stubs.
-- **Checked**: malformed input yields a structured `Fst.Error.t`, never an exception; sizes are
-  bounded before anything is allocated.
+- **Checked**: damaged input yields a structured `Fst.Error.t`, not an exception; sizes are
+  bounded before anything is allocated. A damaged value change block is an error (`Malformed`),
+  not skipped as in libfst, so a damaged trace cannot pass for a short one. The exceptions are a
+  bad block index (`Invalid_argument`) and whatever your sink raises, which reaches the caller of
+  `iter_changes` or `step`.
 
 See [docs/design.md](docs/design.md) for the sources and the behaviours reproduced.
 
@@ -33,7 +36,8 @@ match Fst.open_file "trace.fst" with
 
 `Fst.fold_hierarchy` walks scopes and variables, and `Fst.iter_changes` streams value changes
 in time order to a callback record. `Fst.reader` and `Fst.step` make the same calls one value
-change block at a time, for consumers that pull.
+change block at a time, for consumers that pull. A handle is for one domain at a time, and is
+unusable after `Fst.close` (every call then returns an `Io` error); `fst.mli` has the details.
 
 ## Development
 

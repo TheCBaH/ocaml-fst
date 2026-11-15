@@ -49,6 +49,77 @@ runners it intermittently writes value changes that libfst's own reader rejects 
 120 (rc=-3)`), and on x86-64 a file that flushes and writes again at the same time made the
 reader crash. Parallel mode changes how blocks are written, not their format.
 
+## Module map
+
+`src/` is one library, `fst`, whose only public module is `Fst` (`fst.mli`); the rest are hidden.
+
+| Module | Role |
+| --- | --- |
+| `bin_reader` | Bounded big-endian and LEB128 reads over a string. Every error carries an offset, a file offset or, for a `~hier` reader, one into the decompressed hierarchy. |
+| `error` | The error record and the internal exception `E`; `catch` turns it, and `Sys_error`, into `Error`. |
+| `codec` | zlib and gzip (zipc), LZ4 (unlz4) and FastLZ, each with a size check against the codec's best ratio before anything is allocated. |
+| `fastlz` | FastLZ decoder. |
+| `header` | The header block. |
+| `hier` | The hierarchy tag stream: `fold` (entries), `signals` (kind and length per handle, no names), `count_handles`. |
+| `file` | The source (a string or a channel, behind a `guarded` reader that fails once closed), the block index of `fstReaderInit`, the cached `signals`, geometry, the time-table parser shared by every entry point. |
+| `vc` | Value change blocks: chain-table parsing, the per-block traversal, `reader`/`step`, `start_at` (seeking) and `activity`. |
+| `vcd` | VCD text on top of `Vc`: definitions, identifier codes, value spelling. |
+| `fst` | The public module: wraps the others in `Err.catch` and states the API. |
+
+## Seeking
+
+`blocks` is the index: `File.index` reads 9 bytes at each block (type and length) when the file
+is opened, and `Fst.blocks` then reads the first 16 bytes after the length for the block's start
+and end times. `reader_at k` starts a `Vc.reader` at block `k`. A value change block's frame holds
+the value of every handle except the string variables at its start, so the first step emits the
+frame and, for the string variables, first runs a prepass: a second reader over blocks `0..k-1`
+that selects only the string handles and keeps the last value of each. The cost of a seek is that of reading every earlier block and decompressing the string
+handles' chains in it. `aligned_block` reads time tables only, and decodes a block when its first
+time equals the previous block's last.
+
+Two gaps remain, and are what the seeking phase changes: the prepass's chain-table lengths are
+discarded, while a sequential read carries them across blocks, so a block that depends on them (a
+stale dynamic alias) could differ after a seek; and nothing is remembered between seeks.
+
+## Select and packed
+
+`select` is a predicate on handles, evaluated once per handle at the first step. An unselected
+handle's chain is checked (its size still counts toward the block's declared memory, so which
+blocks are rejected does not depend on the selection) but neither decompressed nor traversed.
+`packed` replaces `sink.vector` for a changed vector that the file stores as 0 and 1 only: the
+bytes are the file's bit-packed form, so no ASCII expansion happens. Frames, other vectors,
+reals and strings go to the sink as before.
+
+## Memory
+
+- The file is read through a channel with a seek per read; nothing is mapped. A gzip-wrapped file
+  is the exception: it is inflated whole when opened, and the channel closed.
+- Opening keeps one record per block (`vc_blocks`), the header, the blackouts and the position of
+  the hierarchy and geometry blocks. The hierarchy is not kept: `signals` keeps one `(kind, length)`
+  per handle, and `fold_hierarchy` decompresses it again each call.
+- A step holds one block: its bytes, the decoded time table, the frame, and a traversal buffer
+  that grows to what the selected chains decompress to (never beyond the block's declared memory
+  plus 66 bytes, and only as data arrives). Per-handle arrays (`scatter`, `headptr`,
+  `remaining`) are sized by the handle count and reused across blocks, as is the traversal buffer.
+- Sink arguments are views into those buffers, valid only during the call.
+
+## libfst compatibility
+
+The data API (`iter_changes`, `reader`, `Vcd`) matches libfst's values, ordering and VCD text for
+every well-formed file; the corpus tests require byte identity. That is a stated decision: it
+is what lets libfst be the oracle. It does not extend to libfst's handling of damaged files.
+libfst continues past some damage and reads out of bounds past other; this library returns an
+error for each, so a damaged trace cannot pass for a short or sparse one. The departures from
+libfst's behaviour (not just from its crashes) are:
+
+1. An invalid time-table trailer: libfst stops reading blocks silently; here it is `Malformed`.
+2. An inconsistent chain table or chain sizes: libfst skips the block silently; here it is
+   `Malformed`, naming the block.
+
+Smaller choices of the same kind: a real whose length is not 8 and an alias to a handle that
+does not exist are `Malformed`; a file with both a gzip and an LZ4 hierarchy block is
+`Unsupported` where libfst takes the last.
+
 ## Robustness
 
 Malformed input raises `Error.E` internally and returns `Error` at the API. Where libfst
@@ -66,6 +137,14 @@ carries on, in two places, so that a damaged file cannot look like a short or a 
   VCD output of well-formed files is unchanged.
 
 `blocks` reads only 16 bytes per block, so the error appears when the block is decoded.
+
+`Error.offset` says which coordinate it is: `` `File `` is an offset into the file, `` `Hierarchy ``
+one into the decompressed hierarchy (which no file offset corresponds to), and `None` means no
+position applies (an I/O error, a missing block).
+
+Exceptions that are not errors in the input are not mapped: `Invalid_argument` for a block index
+that is not one, and whatever a sink raises. A transient `Io` failure while reading the hierarchy
+is not cached in `signals`; every other outcome is.
 
 Every decoded size is checked against the codec's best ratio (zlib 1032:1, LZ4 and FastLZ
 256:1) before any allocation, and the traversal buffer grows only as data arrives, so a
