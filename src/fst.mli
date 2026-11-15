@@ -141,7 +141,9 @@ val iter_changes :
     first, valid only during the call. Vectors with other values, the frame's vectors, reals and
     strings go to the sink as before.
 
-    An exception raised by the sink, [Exit] included, propagates to the caller. *)
+    A block with an inconsistent chain table or chain sizes is [Malformed], naming it by its
+    index among {!blocks}; libfst skips it silently. Likewise for {!step}, {!reader_at} and
+    {!Vcd}. An exception raised by the sink, [Exit] included, propagates to the caller. *)
 
 type reader
 (** The value changes of a file, read one value change block at a time, so that only that

@@ -51,6 +51,9 @@ val set_chain_dest : t -> block:int -> handle:int -> int -> t
 (** Also sets the block's declared traversal memory to [dest], so that the chain is not skipped
     for exceeding it. *)
 
+val set_mem_required : t -> block:int -> int64 -> t
+(** The traversal memory the block declares, which its chains must fit in. *)
+
 val set_chain_table : t -> block:int -> string -> t
 (** Blocks are 0-based in the [set_*] functions. *)
 

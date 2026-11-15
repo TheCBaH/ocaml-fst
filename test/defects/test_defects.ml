@@ -126,6 +126,47 @@ let () =
   at_block "negative-sized clen" (fun set -> set ~uclen:2 ~clen:(-1) ~nitems:2);
   at_block "more items than bytes" (fun set -> set ~uclen:2 ~clen:2 ~nitems:3)
 
+(* N2 / D3: a block whose chains are inconsistent is an error naming the block, from every entry
+   point, and not silently skipped. *)
+let () =
+  let spec =
+    F.make
+      [ F.signal "a" F.Bit; F.signal "s" F.String ]
+      [
+        F.block ~times:[ 10L; 20L ] [ (0, 1, F.B '1'); (1, 2, F.S "x") ];
+        F.block ~times:[ 20L; 30L ] [ (0, 1, F.B '0'); (1, 2, F.S (String.make 100 'y')) ];
+        F.block ~times:[ 40L; 50L ] [ (0, 1, F.B '1') ];
+      ]
+  in
+  let t = open_ spec in
+  check "valid file" (Fst.iter_changes t sink = Ok ());
+  Fst.close t;
+  let named name f =
+    match f () with
+    | Error e ->
+        check (name ^ ": Malformed") (Fst.Error.kind e = Fst.Error.Malformed);
+        let m = Fst.Error.message e in
+        let rec has i = i + 7 <= String.length m && (String.sub m i 7 = "block 1" || has (i + 1)) in
+        check (name ^ ": names block 1: " ^ m) (has 0)
+    | Ok () -> check (name ^ ": Ok") false
+    | exception e -> check (name ^ ": raised " ^ Printexc.to_string e) false
+  in
+  let skipped name bad =
+    let t = open_ bad in
+    named (name ^ " iter_changes") (fun () -> Fst.iter_changes t sink);
+    named (name ^ " Vcd.to_string") (fun () -> Result.map ignore (Fst.Vcd.to_string t));
+    named (name ^ " reader/step") (fun () -> Result.bind (Fst.reader t sink) drain);
+    List.iter
+      (fun k ->
+        named (Printf.sprintf "%s reader_at %d" name k) (fun () ->
+            Result.bind (Fst.reader_at t sink ~block:k) drain))
+      [ 1; 2 ];
+    named (name ^ " aligned_block") (fun () -> Result.map ignore (Fst.aligned_block t 1));
+    Fst.close t
+  in
+  skipped "chains over the declared memory" (F.set_mem_required spec ~block:1 0L);
+  skipped "inconsistent chain table" (F.set_chain_table spec ~block:1 "\000")
+
 (* D1: a sink's [Exit] reaches the caller. *)
 let () =
   let spec =

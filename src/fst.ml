@@ -220,5 +220,5 @@ module Private = struct
     let table = Array.make (vc_maxhandle + 1) 0 and lengths = Array.make (vc_maxhandle + 1) 0 in
     match Vc.parse_chain (s ^ "\000") ~alias2 ~vc_maxhandle ~vc_len table lengths with
     | n -> Some (Array.sub table 0 n, Array.sub lengths 0 n)
-    | exception Vc.Skip_block -> None
+    | exception Vc.Bad_chain -> None
 end

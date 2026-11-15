@@ -52,12 +52,20 @@ reader crash. Parallel mode changes how blocks are written, not their format.
 ## Robustness
 
 Malformed input raises `Error.E` internally and returns `Error` at the API. Where libfst
-silently abandons a block (`goto block_err`: an inconsistent chain table or a traversal buffer
-overrun), so does this reader; where libfst aborts or reads out of bounds, this reader returns
-an error. The time table is the exception: libfst `break`s out of the block loop, without an
-error, when a block's trailer is invalid (its compressed size exceeds the block). Here that is
-`Malformed` from every entry point, so a damaged file cannot look like a short one. `blocks`
-reads only 16 bytes per block, so the error appears when the block is decoded.
+aborts or reads out of bounds, this reader returns an error. It departs from libfst, which
+carries on, in two places, so that a damaged file cannot look like a short or a sparse one:
+
+- A block whose trailer gives an invalid time table: libfst `break`s out of the block loop
+  without an error. Here it is `Malformed` from every entry point.
+- A block whose chain table or chain sizes are inconsistent (an unparsable table, a chain
+  shorter than its length, chains over the memory the block declares): libfst abandons the
+  block (`goto block_err`) and goes on with the next, reporting nothing. Here it is `Malformed`
+  naming the block, by its index among `blocks`. libfst's malformed-file tests allow a reader
+  to reject such files, and three of them (`rvat_chain_table_overrun`,
+  `uncompressed_chain_past_traversal`, `uncompressed_chain_shorter_than_its_varint`) now do.
+  VCD output of well-formed files is unchanged.
+
+`blocks` reads only 16 bytes per block, so the error appears when the block is decoded.
 
 Every decoded size is checked against the codec's best ratio (zlib 1032:1, LZ4 and FastLZ
 256:1) before any allocation, and the traversal buffer grows only as data arrives, so a
