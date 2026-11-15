@@ -67,8 +67,9 @@ let drain r =
 
 let bit_chars = "01xzhuwl-?"
 
-(* A sink that checks what the documentation promises of its calls, against [signals]. *)
-let checking name signals ~selected =
+(* A sink that checks what the documentation promises of its calls, against [signals]. The events
+   do not mark the frame, so [frame_bits] accepts any character as a bit. *)
+let checking ?(frame_bits = false) name signals ~selected =
   let n = match signals with Some a -> Array.length a | None -> 0 in
   let sg what h =
     if h < 1 || h > n then (
@@ -92,7 +93,8 @@ let checking name signals ~selected =
           (match sg "bit" h with
           | Some (Fst.Bit, _ | Port, 1) -> ()
           | _ -> fail name "bit: handle %d is not a bit" h);
-          if (not !in_frame) && not (String.contains bit_chars c) then fail name "bit: %C" c);
+          if (not (!in_frame || frame_bits)) && not (String.contains bit_chars c) then
+            fail name "bit: %C" c);
       vector =
         (fun h b off len ->
           (match sg "vector" h with
@@ -148,9 +150,9 @@ let exercise name s =
       in
       let bs = ref None in
       ignore (call name "blocks" (fun () -> Result.map (fun b -> bs := Some b) (Fst.blocks t)));
-      let sink_of ?select () =
+      let sink_of ?select ?frame_bits () =
         let selected = match select with Some f -> f | None -> all in
-        checking name !sg ~selected
+        checking ?frame_bits name !sg ~selected
       in
       let iter ?select ?(packed = false) entry =
         let sink, p = sink_of ?select () in
@@ -189,6 +191,50 @@ let exercise name s =
       in
       agree_vcd "Vcd.to_string" (vcd "Vcd.to_string");
       agree_vcd "Vcd.to_string ~extensions" (vcd ~extensions:true "Vcd.to_string ~extensions");
+      let events_sink ?select ~packed () =
+        let sink, p = sink_of ?select ~frame_bits:true () in
+        {
+          Fst.Vcd.ignore_sink with
+          time = sink.time;
+          frame = sink.frame;
+          bit = sink.bit;
+          vector = sink.vector;
+          port = sink.vector;
+          real = sink.real;
+          varlen = sink.varlen;
+          packed = (if packed then Some p else None);
+        }
+      in
+      let events ?extensions ?select ?(packed = false) entry =
+        call name entry (fun () ->
+            Fst.Vcd.events ?extensions ?select t (events_sink ?select ~packed ()))
+      in
+      agree_vcd "Vcd.events" (events "Vcd.events");
+      agree_vcd "Vcd.events ~extensions" (events ~extensions:true "Vcd.events ~extensions");
+      agree_vcd "Vcd.events ~packed" (events ~packed:true "Vcd.events ~packed");
+      ignore (events ~select:odd ~packed:true "Vcd.events ~select ~packed");
+      let pulled ?extensions ?block entry =
+        call name entry (fun () ->
+            Result.bind
+              (Fst.Vcd.reader ?extensions ?block t (events_sink ~packed:true ()))
+              (fun r ->
+                let rec go () =
+                  match Fst.Vcd.step r with
+                  | Ok true -> go ()
+                  | Ok false -> Ok ()
+                  | Error e -> Error e
+                in
+                go ()))
+      in
+      agree_vcd "Vcd.reader" (pulled "Vcd.reader");
+      agree_vcd "Vcd.reader ~extensions" (pulled ~extensions:true "Vcd.reader ~extensions");
+      (let raising = { Fst.Vcd.ignore_sink with time = (fun _ -> raise Exit) } in
+       incr calls;
+       match Fst.Vcd.events t raising with
+       | _ -> ()
+       | exception Exit -> ()
+       | exception e -> fail name "raising events sink: %s" (Printexc.to_string e));
+      agree_vcd "Vcd.events after a raising sink" (events "Vcd.events again");
       let n = match !bs with Some b -> Array.length b | None -> 0 in
       let ks =
         List.sort_uniq compare (List.filter (fun k -> k >= 0 && k < n) [ 0; 1; n / 2; n - 1 ])
@@ -201,6 +247,7 @@ let exercise name s =
                 Result.bind (Fst.reader_at t sink ~block:k) drain)
           in
           if k = 0 then agree "reader_at 0" at;
+          if k > 0 then ignore (pulled ~block:k (Printf.sprintf "Vcd.reader ~block:%d" k));
           let sink, p = sink_of ~select:odd () in
           ignore
             (call name (Printf.sprintf "reader_at %d ~select ~packed" k) (fun () ->
@@ -218,12 +265,17 @@ let exercise name s =
         expect_invalid name "reader_at past the end" (fun () -> Fst.reader_at t sink ~block:n);
         expect_invalid name "reader_at negative" (fun () -> Fst.reader_at t sink ~block:(-1));
         expect_invalid name "aligned_block past the end" (fun () -> Fst.aligned_block t n);
-        expect_invalid name "aligned_block negative" (fun () -> Fst.aligned_block t (-1))
+        expect_invalid name "aligned_block negative" (fun () -> Fst.aligned_block t (-1));
+        expect_invalid name "Vcd.reader past the end" (fun () ->
+            Fst.Vcd.reader ~block:n t Fst.Vcd.ignore_sink);
+        expect_invalid name "Vcd.reader negative" (fun () ->
+            Fst.Vcd.reader ~block:(-1) t Fst.Vcd.ignore_sink)
       end;
       let stepper =
         let sink, _ = sink_of () in
         Fst.reader t sink
       in
+      let vstepper = Fst.Vcd.reader t Fst.Vcd.ignore_sink in
       Fst.close t;
       Fst.close t;
       let closed entry f = ignore (call ~closed:true name entry f) in
@@ -235,6 +287,12 @@ let exercise name s =
       closed "closed blocks" (fun () -> Result.map ignore (Fst.blocks t));
       closed "closed Vcd.to_string" (fun () -> Result.map ignore (Fst.Vcd.to_string t));
       closed "closed reader" (fun () -> Result.map ignore (Fst.reader t Fst.ignore_sink));
+      closed "closed Vcd.events" (fun () -> Fst.Vcd.events t Fst.Vcd.ignore_sink);
+      closed "closed Vcd.reader" (fun () ->
+          Result.map ignore (Fst.Vcd.reader t Fst.Vcd.ignore_sink));
+      (match vstepper with
+      | Ok r -> closed "closed Vcd.step" (fun () -> Result.map ignore (Fst.Vcd.step r))
+      | Error _ -> ());
       (match stepper with
       | Ok r -> closed "closed step" (fun () -> Result.map ignore (Fst.step r))
       | Error _ -> ());

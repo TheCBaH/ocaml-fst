@@ -3,8 +3,8 @@
 ; reference itself (a libfst bump, a 32-bit build) shows up as a diff of corpus.digests.
 
 (executables
- (names test_corpus robust digests)
- (libraries fst fst_fixture time_range))
+ (names test_corpus test_events robust digests)
+ (libraries fst fst_fixture time_range vcd_events))
 
 (rule
  (alias runtest)
@@ -40,3 +40,9 @@
  (alias runtest)
  (action
   (diff corpus.digests corpus.digests.gen)))
+
+(rule
+ (alias runtest)
+ (deps %{project_root}/test/reference/corpus)
+ (action
+  (run %{exe:test_events.exe} %{project_root}/test/reference/corpus)))

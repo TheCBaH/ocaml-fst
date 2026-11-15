@@ -618,8 +618,8 @@ let activity ~file ~signals j =
   (!first, !last)
 
 (* Starts at block [block] (0-based, within [file.vc_blocks]). *)
-let start_at ?select ?packed ~file ~signals ~sink ~block () =
-  let r = start ?select ?packed ~from:block ~file ~signals ~sink () in
+let start_at ?select ?packed ?max_bits ~file ~signals ~sink ~block () =
+  let r = start ?select ?packed ?max_bits ~from:block ~file ~signals ~sink () in
   if block > 0 then begin
     r.prepass <- block;
     r.recovered <- Some []

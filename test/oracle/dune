@@ -3,4 +3,13 @@
 
 (library
  (name time_range)
+ (modules time_range)
+ (libraries fst))
+
+; A printer of Fst.Vcd's events written apart from the library's own, so that a VCD can be
+; compared with what the events carry.
+
+(library
+ (name vcd_events)
+ (modules vcd_events)
  (libraries fst))

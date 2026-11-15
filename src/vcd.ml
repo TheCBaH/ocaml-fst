@@ -119,84 +119,101 @@ let var_length ~var_type ~length =
   in
   if var_type = Hier.vt_port then (len - 2) land Vc.mask32 / 3 else len
 
+type definition =
+  | Date of string
+  | Version of string
+  | Timezero of int64
+  | Timescale of string
+  | Scope of { scope_type : string; name : string }
+  | Upscope
+  | Comment of string
+  | Attr_begin of { attr_type : string; subtype : string; name : string; arg : int64 }
+  | Attr_end
+  | Var of {
+      var_type : string;
+      kind : Hier.kind;
+      size : int;
+      id : string;
+      handle : int;
+      alias : bool;
+      name : string;
+    }
+  | End_definitions
+
 let adds b l = List.iter (Buffer.add_string b) l
 
-let definitions ~extensions (file : File.t) b =
+let print_definition b = function
+  | Date s -> adds b [ "$date\n\t"; s; "\n$end\n" ]
+  | Version s -> adds b [ "$version\n\t"; s; "\n$end\n" ]
+  | Timezero z -> adds b [ "$timezero\n\t"; Int64.to_string z; "\n$end\n" ]
+  | Timescale s -> adds b [ "$timescale\n\t"; s; "\n$end\n" ]
+  | Scope { scope_type; name } -> adds b [ "$scope "; scope_type; " "; name; " $end\n" ]
+  | Upscope -> Buffer.add_string b "$upscope $end\n"
+  | Comment s -> adds b [ "$comment\n\t"; s; "\n$end\n" ]
+  | Attr_begin { attr_type; subtype; name; arg } ->
+      adds b
+        [ "$attrbegin "; attr_type; " "; subtype; " "; name; " "; Int64.to_string arg; " $end\n" ]
+  | Attr_end -> Buffer.add_string b "$attrend $end\n"
+  | Var { var_type; size; id; name; _ } ->
+      Buffer.add_string b "$var ";
+      Buffer.add_string b var_type;
+      Buffer.add_char b ' ';
+      Buffer.add_string b (string_of_int size);
+      Buffer.add_char b ' ';
+      Buffer.add_string b id;
+      Buffer.add_char b ' ';
+      Buffer.add_string b name;
+      Buffer.add_string b " $end\n"
+  | End_definitions -> Buffer.add_string b "$enddefinitions $end\n"
+
+(* The definitions in the order [print_definition] writes them. [signals] is the file's, read
+   first so that a closed or damaged file is reported before any definition is passed on. *)
+let definitions ~extensions (file : File.t) ~signals f =
   let h = file.header in
-  Buffer.add_string b "$date\n\t";
-  Buffer.add_string b h.date;
-  Buffer.add_string b "\n$end\n$version\n\t";
-  Buffer.add_string b h.version;
-  Buffer.add_string b "\n$end\n";
-  if not (Int64.equal h.timezero 0L) then begin
-    Buffer.add_string b "$timezero\n\t";
-    Buffer.add_string b (Int64.to_string h.timezero);
-    Buffer.add_string b "\n$end\n"
-  end;
-  Buffer.add_string b "$timescale\n\t";
-  Buffer.add_string b (timescale h.timescale);
-  Buffer.add_string b "\n$end\n";
-  let signals = File.signals_exn file in
+  f (Date h.date);
+  f (Version h.version);
+  if not (Int64.equal h.timezero 0L) then f (Timezero h.timezero);
+  f (Timescale (timescale h.timescale));
   let data = File.hierarchy_data file in
   Hier.fold ~handles:(Array.length signals) data ~init:() ~f:(fun () e ->
       match e with
       | Hier.Scope { scope_type; name; _ } ->
           let st = if scope_type >= Array.length Hier.scope_type_names then 0 else scope_type in
-          Buffer.add_string b "$scope ";
-          Buffer.add_string b Hier.scope_type_names.(st);
-          Buffer.add_char b ' ';
-          Buffer.add_string b name;
-          Buffer.add_string b " $end\n"
-      | Upscope -> Buffer.add_string b "$upscope $end\n"
+          f (Scope { scope_type = Hier.scope_type_names.(st); name })
+      | Upscope -> f Upscope
       | Attr_begin { attr_type; subtype; name; arg } ->
-          let name = if name = "" then "\"\"" else name in
-          if extensions then
-            let line kind names =
+          if extensions then begin
+            let name = if name = "" then "\"\"" else name in
+            let typed kind names =
               let sub = if subtype >= Array.length names then 0 else subtype in
-              adds b
-                [
-                  "$attrbegin ";
-                  kind;
-                  " ";
-                  names.(sub);
-                  " ";
-                  name;
-                  " ";
-                  Int64.to_string arg;
-                  " $end\n";
-                ]
+              f (Attr_begin { attr_type = kind; subtype = names.(sub); name; arg })
             in
-            if attr_type = 1 then line attr_type_names.(1) array_type_names
-            else if attr_type = 2 then line attr_type_names.(2) enum_value_type_names
-            else if attr_type = 3 then line attr_type_names.(3) pack_type_names
-            else if subtype = 0 then adds b [ "$comment\n\t"; name; "\n$end\n" ]
+            if attr_type = 1 then typed attr_type_names.(1) array_type_names
+            else if attr_type = 2 then typed attr_type_names.(2) enum_value_type_names
+            else if attr_type = 3 then typed attr_type_names.(3) pack_type_names
+            else if subtype = 0 then f (Comment name)
             else
               let name =
                 if subtype = 4 || subtype = 5 then Int64.to_string (varint_of_name name) else name
               in
-              adds b
-                [
-                  "$attrbegin misc ";
-                  Printf.sprintf "%02x" subtype;
-                  " ";
-                  name;
-                  " ";
-                  Int64.to_string arg;
-                  " $end\n";
-                ]
-      | Attr_end -> if extensions then Buffer.add_string b "$attrend $end\n"
-      | Var { var_type; name; length; handle; _ } ->
-          Buffer.add_string b "$var ";
-          Buffer.add_string b Hier.var_type_names.(var_type);
-          Buffer.add_char b ' ';
-          Buffer.add_string b (string_of_int (var_length ~var_type ~length));
-          Buffer.add_char b ' ';
-          Buffer.add_string b (id handle);
-          Buffer.add_char b ' ';
-          Buffer.add_string b name;
-          Buffer.add_string b " $end\n");
-  Buffer.add_string b "$enddefinitions $end\n";
-  signals
+              f
+                (Attr_begin
+                   { attr_type = "misc"; subtype = Printf.sprintf "%02x" subtype; name; arg })
+          end
+      | Attr_end -> if extensions then f Attr_end
+      | Var { var_type; name; length; handle; alias; _ } ->
+          f
+            (Var
+               {
+                 var_type = Hier.var_type_names.(var_type);
+                 kind = Hier.kind_of ~var_type ~length;
+                 size = var_length ~var_type ~length;
+                 id = id handle;
+                 handle;
+                 alias;
+                 name;
+               }));
+  f End_definitions
 
 (* The output is formatted straight into [buf], and [emit buf 0 n] is called when it is full. Each
    writer is preceded by a check that there is room for it. *)
@@ -265,25 +282,62 @@ let put_time o t =
   end
   else line o (Printf.sprintf "#%Lu\n" t)
 
-let write ~extensions file ~emit =
-  let defs = Buffer.create 131072 in
-  let signals = definitions ~extensions file defs in
-  emit (Buffer.to_bytes defs) 0 (Buffer.length defs);
-  let ports = Array.map (fun (k, _) -> k = Hier.Port) signals in
-  let signals = Vc.tables signals in
-  let ids = Array.init (Array.length signals.lens) (fun i -> id (i + 1)) in
-  let idmax = Array.fold_left (fun m s -> max m (String.length s)) 0 ids in
-  let o = { emit; buf = Bytes.create 65536; n = 0; ids; idmax } in
-  let dumpvars = ref 0 in
-  let blackouts = file.blackouts and cur = ref 0 in
+type marker = Dumpvars | Dumpvars_end | Dumpon | Dumpoff
+
+type sink = {
+  definition : definition -> unit;
+  time : int64 -> unit;
+  frame : int64 -> unit;
+  dump : marker -> unit;
+  bit : int -> char -> unit;
+  vector : int -> bytes -> int -> int -> unit;
+  packed : (int -> bytes -> int -> int -> unit) option;
+  port : int -> bytes -> int -> int -> unit;
+  real : int -> float -> unit;
+  varlen : int -> bytes -> int -> int -> unit;
+}
+
+let ignore_sink =
+  {
+    definition = ignore;
+    time = ignore;
+    frame = ignore;
+    dump = ignore;
+    bit = (fun _ _ -> ());
+    vector = (fun _ _ _ _ -> ());
+    packed = None;
+    port = (fun _ _ _ _ -> ());
+    real = (fun _ _ -> ());
+    varlen = (fun _ _ _ _ -> ());
+  }
+
+type stage = Definitions | Blocks | Ended
+
+type reader = {
+  file : File.t;
+  vc : Vc.reader;
+  extensions : bool;
+  signals : (Hier.kind * int) array;
+  definition : definition -> unit;
+  mutable stage : stage;
+}
+
+let reader ?(extensions = false) ?select ?max_bits ?(block = 0) (file : File.t) (s : sink) =
+  let kinds = File.signals_exn file in
+  let signals = Vc.tables kinds in
+  let ports = Array.map (fun (k, _) -> k = Hier.Port) kinds in
+  let has_ports = Array.exists Fun.id ports in
+  let resume = block > 0 in
+  let blackouts = file.blackouts in
+  let dumpvars = ref (if resume then 2 else 0) and cur = ref 0 and first = ref resume in
   let new_time t =
     if !dumpvars = 1 then begin
-      line o "$end\n";
+      s.dump Dumpvars_end;
       dumpvars := 2
     end;
-    put_time o t;
+    s.time t;
     if !dumpvars = 0 then begin
-      line o "$dumpvars\n";
+      s.dump Dumpvars;
       dumpvars := 1
     end
   in
@@ -291,7 +345,7 @@ let write ~extensions file ~emit =
     if !cur < Array.length blackouts then begin
       let bt, on = blackouts.(!cur) in
       if Int64.equal bt t then begin
-        line o (if on then "$dumpon $end\n" else "$dumpoff $end\n");
+        s.dump (if on then Dumpon else Dumpoff);
         incr cur
       end
     end
@@ -300,12 +354,85 @@ let write ~extensions file ~emit =
     {
       Vc.time =
         (fun t ->
+          if !first then begin
+            first := false;
+            while !cur < Array.length blackouts && Int64.compare (fst blackouts.(!cur)) t < 0 do
+              incr cur
+            done
+          end;
           new_time t;
           blackout t);
       frame =
         (fun t ->
-          if not (Int64.equal t 0L) then new_time t;
-          blackout t);
+          if resume then s.frame t
+          else begin
+            if not (Int64.equal t 0L) then new_time t;
+            blackout t
+          end);
+      bit = s.bit;
+      vector =
+        (let vector = s.vector and port = s.port in
+         if has_ports then fun h b off len ->
+           if ports.(h - 1) then port h b off len else vector h b off len
+         else vector);
+      real = s.real;
+      varlen = s.varlen;
+    }
+  in
+  let packed =
+    if not has_ports then s.packed
+    else
+      Option.map
+        (fun packed h b off w ->
+          if Array.unsafe_get ports (h - 1) then begin
+            let sb = Bytes.create w in
+            Vc.expand_into sb 0 b off w;
+            s.port h sb 0 w
+          end
+          else packed h b off w)
+        s.packed
+  in
+  let vc = Vc.start_at ?select ?packed ?max_bits ~file ~signals ~sink ~block () in
+  { file; vc; extensions; signals = kinds; definition = s.definition; stage = Definitions }
+
+let step r =
+  File.check_open r.file;
+  match r.stage with
+  | Definitions ->
+      r.stage <- Ended;
+      definitions ~extensions:r.extensions r.file ~signals:r.signals r.definition;
+      r.stage <- Blocks;
+      true
+  | Ended -> false
+  | Blocks -> Vc.step r.vc
+
+let events ?extensions ?select ?max_bits file sink =
+  let r = reader ?extensions ?select ?max_bits file sink in
+  while step r do
+    ()
+  done
+
+let write ~extensions file ~emit =
+  let defs = Buffer.create 131072 in
+  let ids = Array.init (Array.length (File.signals_exn file)) (fun i -> id (i + 1)) in
+  let idmax = Array.fold_left (fun m s -> max m (String.length s)) 0 ids in
+  let o = { emit; buf = Bytes.create 65536; n = 0; ids; idmax } in
+  let sink =
+    {
+      definition =
+        (fun d ->
+          print_definition defs d;
+          match d with
+          | End_definitions -> emit (Buffer.to_bytes defs) 0 (Buffer.length defs)
+          | _ -> ());
+      time = put_time o;
+      frame = ignore;
+      dump =
+        (function
+        | Dumpvars -> line o "$dumpvars\n"
+        | Dumpvars_end -> line o "$end\n"
+        | Dumpon -> line o "$dumpon $end\n"
+        | Dumpoff -> line o "$dumpoff $end\n");
       bit =
         (fun h c ->
           ensure o (idmax + 2);
@@ -314,7 +441,22 @@ let write ~extensions file ~emit =
       vector =
         (fun h s off len ->
           ensure o (len + idmax + 3);
-          put_char o (if ports.(h - 1) then 'p' else 'b');
+          put_char o 'b';
+          Bytes.blit s off o.buf o.n len;
+          o.n <- o.n + len;
+          put_tail o h);
+      packed =
+        Some
+          (fun h s off len ->
+            ensure o (len + idmax + 3);
+            put_char o 'b';
+            Vc.expand_into o.buf o.n s off len;
+            o.n <- o.n + len;
+            put_tail o h);
+      port =
+        (fun h s off len ->
+          ensure o (len + idmax + 3);
+          put_char o 'p';
           Bytes.blit s off o.buf o.n len;
           o.n <- o.n + len;
           put_tail o h);
@@ -340,12 +482,5 @@ let write ~extensions file ~emit =
           put_tail o h);
     }
   in
-  let packed h s off len =
-    ensure o (len + idmax + 3);
-    put_char o (if Array.unsafe_get ports (h - 1) then 'p' else 'b');
-    Vc.expand_into o.buf o.n s off len;
-    o.n <- o.n + len;
-    put_tail o h
-  in
-  Vc.iter ~max_bits:(Sys.max_string_length - idmax - 3) ~file ~signals ~sink ~packed ();
+  events ~extensions ~max_bits:(Sys.max_string_length - idmax - 3) file sink;
   drain o

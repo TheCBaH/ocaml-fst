@@ -81,6 +81,10 @@ let () =
   check "block count" (Array.length (ok "blocks" (Fst.blocks t)) = 2);
   let vcd = ok "vcd" (Fst.Vcd.to_string t) in
   List.iter
+    (fun (what, mode, packed) ->
+      check ("events render " ^ what) (Vcd_events.render ~packed ~mode t = Ok vcd))
+    [ ("pushed", Vcd_events.Push, false); ("pulled", Pull, false); ("packed", Push, true) ];
+  List.iter
     (fun sub -> check ("vcd has " ^ String.escaped sub) (contains vcd sub))
     [
       "$var wire 1 ! a $end";
@@ -260,6 +264,9 @@ let () =
   Sys.remove path;
   (match reference exe s with
   | Some expected ->
-      check "libfst agrees with the stale fixture" (expected = ok "vcd" (Fst.Vcd.to_string t))
+      check "libfst agrees with the stale fixture" (expected = ok "vcd" (Fst.Vcd.to_string t));
+      check "events render the stale fixture"
+        (Vcd_events.render ~mode:Push t = Ok expected
+        && Vcd_events.render ~packed:true ~mode:Pull t = Ok expected)
   | None -> check "libfst rejected the stale fixture" false);
   if !failures > 0 then exit 1
