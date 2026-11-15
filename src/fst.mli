@@ -245,13 +245,110 @@ val aligned_block : t -> int -> (int, Error.t) result
 
     @raise Invalid_argument if [k] is not the index of a block, as for {!reader_at}. *)
 
-(** VCD output. *)
+(** VCD output, and the same content as events. *)
 module Vcd : sig
   val write : ?extensions:bool -> t -> out_channel -> (unit, Error.t) result
   (** Writes what libfst's [fst2vcd] writes; [extensions] is its [-e] (attributes as
-      [$attrbegin]). *)
+      [$attrbegin]). It is {!events} printed. *)
 
   val to_string : ?extensions:bool -> t -> (string, Error.t) result
+
+  (** {1 Events}
+
+      The content {!write} prints, as calls instead of text: the same items in the same order and
+      with the same values, so that a consumer that wants a VCD's structure (a parser's, a
+      viewer's) need not print and parse. The value calls are those of {!Fst.sink}, with the same
+      handles (1-based, never aliases) and byte views, except that a port's vector has its own
+      call and [packed] is a field. *)
+
+  type definition =
+    | Date of string  (** [$date], with the newline of the header. *)
+    | Version of string
+    | Timezero of int64  (** Only when it is not 0. *)
+    | Timescale of string  (** E.g. [1ns]. *)
+    | Scope of { scope_type : string; name : string }  (** [$scope]: [module], [task], ... *)
+    | Upscope
+    | Comment of string
+        (** [$comment], for a hierarchy attribute of type [misc] and subtype 0: only with
+            [extensions]. An empty text is [""] with its two quotes, as printed. *)
+    | Attr_begin of { attr_type : string; subtype : string; name : string; arg : int64 }
+        (** [$attrbegin], only with [extensions]: [attr_type] is [misc], [array], [enum] or
+            [class], and [subtype] and [name] are spelt as printed. *)
+    | Attr_end  (** Only with [extensions]. *)
+    | Var of {
+        var_type : string;  (** [wire], [reg], ... *)
+        kind : kind;  (** What the value calls for this variable's handle are. *)
+        size : int;  (** The [$var] size, {!var_length} of the declared length. *)
+        id : string;  (** The identifier code, [id handle]. *)
+        handle : int;
+        alias : bool;  (** [handle] is another variable's,. *)
+        name : string;
+      }
+    | End_definitions  (** [$enddefinitions]; the last definition. No value call precedes it. *)
+
+  type marker =
+    | Dumpvars
+        (** [$dumpvars]: the values that follow, up to [Dumpvars_end], are the initial ones. It
+            comes right after the first [time]. *)
+    | Dumpvars_end
+        (** [$end] of the [$dumpvars]; right before the second [time]. A file with a single
+            time never gets one, as in the printed output. *)
+    | Dumpon  (** A whole [$dumpon $end]. *)
+    | Dumpoff  (** A whole [$dumpoff $end]. *)
+
+  type sink = {
+    definition : definition -> unit;
+    time : int64 -> unit;  (** [#time]: the changes that follow are at this time. *)
+    frame : int64 -> unit;
+        (** Only from a {!reader} with [~block] above 0: the values of the block's frame follow
+            at this time, up to the next [time], which is the block's first. *)
+    dump : marker -> unit;
+        (** [Dumpvars], [Dumpon] and [Dumpoff] come right after the [time] they are at, before its
+            changes; [Dumpvars_end] right before the [time] that ends the dump. *)
+    bit : int -> char -> unit;  (** One of [01xzhuwl-?]. *)
+    vector : int -> bytes -> int -> int -> unit;
+        (** One character per bit, most significant first; not a port's. *)
+    packed : (int -> bytes -> int -> int -> unit) option;
+        (** When given, receives the vectors that {!Fst.iter_changes} gives to its [packed], except
+            a port's, instead of [vector]. *)
+    port : int -> bytes -> int -> int -> unit;
+        (** A port's vector, [3n+2] characters, which a VCD prints with [p]. *)
+    real : int -> float -> unit;
+        (** A VCD prints it with [%.16g] (and nan and the infinities as glibc does). *)
+    varlen : int -> bytes -> int -> int -> unit;
+        (** A string variable's raw bytes: {!escape} gives the text of the [s] record. *)
+  }
+  (** Receives the content in the order {!write} prints it. Bytes are only valid during the call
+      and must not be modified. *)
+
+  val ignore_sink : sink
+  (** Ignores every call; write [{ Fst.Vcd.ignore_sink with ... }] as for {!Fst.ignore_sink}. *)
+
+  val events : ?extensions:bool -> ?select:(int -> bool) -> t -> sink -> (unit, Error.t) result
+  (** Passes the whole content to the sink: the definitions, then the changes. [extensions] is as
+      for {!write}. [select] is as for {!Fst.iter_changes}: the value calls of the unselected
+      handles are dropped, and nothing else is. Errors are those of {!Fst.fold_hierarchy} and of
+      {!Fst.iter_changes}, with [Io] for a closed file before any call; a damaged hierarchy may
+      be found after some definitions were passed on. An exception raised by the sink propagates.
+      The handle stays usable. *)
+
+  type reader
+  (** {!events}, read one step at a time. *)
+
+  val reader :
+    ?extensions:bool -> ?select:(int -> bool) -> ?block:int -> t -> sink -> (reader, Error.t) result
+  (** Reads the hierarchy and calls nothing yet. With [block] above 0 it starts at that block of
+      {!blocks} as {!reader_at} does and the output differs from {!events}': there is no
+      [Dumpvars], the first change block's [frame] stands for its time step's [#time] and
+      the blackouts before the block's first time are dropped. The definitions are still passed.
+
+      @raise Invalid_argument if [block] is given and there is no such block, as for
+      {!reader_at}. *)
+
+  val step : reader -> (bool, Error.t) result
+  (** The first step passes the definitions and nothing else, each later step the content of the
+      next value change block, as {!Fst.step} does. [Ok false] when none remains; after an error
+      or a sink's exception none does. [Io] if the file is closed. *)
 
   (** How {!write} spells things, for consumers that build their own VCD view. *)
 

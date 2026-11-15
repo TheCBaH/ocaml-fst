@@ -167,6 +167,55 @@ let aligned_block (t : t) k =
       back k)
 
 module Vcd = struct
+  type definition = V.definition =
+    | Date of string
+    | Version of string
+    | Timezero of int64
+    | Timescale of string
+    | Scope of { scope_type : string; name : string }
+    | Upscope
+    | Comment of string
+    | Attr_begin of { attr_type : string; subtype : string; name : string; arg : int64 }
+    | Attr_end
+    | Var of {
+        var_type : string;
+        kind : kind;
+        size : int;
+        id : string;
+        handle : int;
+        alias : bool;
+        name : string;
+      }
+    | End_definitions
+
+  type marker = V.marker = Dumpvars | Dumpvars_end | Dumpon | Dumpoff
+
+  type sink = V.sink = {
+    definition : definition -> unit;
+    time : int64 -> unit;
+    frame : int64 -> unit;
+    dump : marker -> unit;
+    bit : int -> char -> unit;
+    vector : int -> bytes -> int -> int -> unit;
+    packed : (int -> bytes -> int -> int -> unit) option;
+    port : int -> bytes -> int -> int -> unit;
+    real : int -> float -> unit;
+    varlen : int -> bytes -> int -> int -> unit;
+  }
+
+  let ignore_sink = V.ignore_sink
+  let events ?extensions ?select t sink = Err.catch (fun () -> V.events ?extensions ?select t sink)
+
+  type reader = V.reader
+
+  let reader ?extensions ?select ?block t sink =
+    Err.catch (fun () ->
+        File.check_open t;
+        Option.iter (check_block t) block;
+        V.reader ?extensions ?select ?block t sink)
+
+  let step r = Err.catch (fun () -> V.step r)
+
   let write ?(extensions = false) t oc =
     Err.catch (fun () -> V.write ~extensions t ~emit:(output oc))
 

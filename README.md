@@ -39,6 +39,12 @@ in time order to a callback record. `Fst.reader` and `Fst.step` make the same ca
 change block at a time, for consumers that pull. A handle is for one domain at a time, and is
 unusable after `Fst.close` (every call then returns an `Io` error); `fst.mli` has the details.
 
+`Fst.Vcd.events` passes the VCD content itself, as calls and not text: the definitions (scopes,
+variables with their kind, size, identifier code and alias flag) and then the timestamps, value
+changes and `$dumpvars`/`$dumpon`/`$dumpoff` markers in the order `Fst.Vcd.write` prints them.
+`Fst.Vcd.reader` and `Fst.Vcd.step` do so one block at a time, and from a given block on, for
+consumers that build their own VCD view without printing and parsing the text.
+
 ## Development
 
 Use the [devcontainer](https://github.com/TheCBaH/ocaml-fst/tree/main/.devcontainer);

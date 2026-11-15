@@ -63,7 +63,7 @@ reader crash. Parallel mode changes how blocks are written, not their format.
 | `hier` | The hierarchy tag stream: `fold` (entries), `signals` (kind and length per handle, no names), `count_handles`. |
 | `file` | The source (a string or a channel, behind a `guarded` reader that fails once closed), the block index of `fstReaderInit`, the cached `signals`, geometry, the time-table parser shared by every entry point. |
 | `vc` | Value change blocks: chain-table parsing, the per-block traversal, `reader`/`step`, `start_at` (seeking) and `activity`. |
-| `vcd` | VCD text on top of `Vc`: definitions, identifier codes, value spelling. |
+| `vcd` | VCD on top of `Vc`: the definitions and the sink of events (`events`, `reader`, `step`: definitions, then timestamps, `$dump*` markers and value changes as calls), identifier codes, value spelling. `write` prints those events, formatting straight into its output buffer; the events layer adds no copy of a value, only a call per change (see Events). |
 | `fst` | The public module: wraps the others in `Err.catch` and states the API. |
 
 ## Seeking
@@ -103,6 +103,30 @@ a later block that lists the handle as unchanged resolves it. A seek does not ca
 into block `k` (libfst's time-limited read does not either), so the handle's changes in `k` are
 missing. `test/fixture/test_fixture.ml` asserts this, against libfst, as an exception, not as a
 defect to fix.
+
+## Events
+
+`Vcd.events` (and `reader`/`step`, which can also start at a block) is the VCD content as calls:
+`Vcd.sink` has the definitions, `time`, the `$dumpvars`/`$dumpon`/`$dumpoff` markers and the value
+changes. `Vcd.write` is a printer over it, so the structure of the output has one source. The
+`$dumpvars` state machine and the blackout placement live in `Vcd.reader` once; `write` and a
+consumer's events cannot disagree on them.
+
+- The value calls are the `Vc` sink's: `bit`, `real` and `varlen` are passed through, so a
+  consumer pays no more than for `iter_changes`. `vector` and `packed` are wrapped (to send a
+  port's vector to `port`, which `write` prints with `p`) only when the file has a port.
+- `write` was kept at its speed by passing `packed` straight through for files without ports: a
+  wrapper on every vector was measured at +2% to +3% on the Verilator traces. With the
+  pass-through, `write` is within noise of the version that printed directly (see the P5 notes).
+- `reader ~block:k` is `reader_at`: no `$dumpvars`, the frame is announced by `frame`, and
+  blackouts before the first time are dropped.
+- The definitions go through `Vcd.definition` values; `write` prints them into a buffer that it
+  emits at `End_definitions`, so a hierarchy error still yields no definitions in the output.
+- Tests: a reference printer (`test/oracle/vcd_events.ml`), written apart from the library's,
+  renders the events and its text must equal `Vcd.to_string` on every corpus file (with and
+  without extensions, pushed or pulled, packed or not), on the fixtures, including one with
+  non-finite reals, a port, an escaped string and an empty scope name, and on the stale-alias
+  fixture. `robust` runs the event entry points over the mutated files.
 
 ## Select and packed
 
