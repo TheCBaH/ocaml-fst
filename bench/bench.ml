@@ -292,10 +292,9 @@ let sparse () =
 
 (* Deterministic shuffle. *)
 let shuffle n =
-  let a = Array.init n Fun.id and s = ref 12345 in
+  let a = Array.init n Fun.id and st = Random.State.make [| 12345 |] in
   for i = n - 1 downto 1 do
-    s := ((!s * 1103515245) + 12345) land 0x3fffffff;
-    let j = !s mod (i + 1) in
+    let j = Random.State.int st (i + 1) in
     let x = a.(i) in
     a.(i) <- a.(j);
     a.(j) <- x
