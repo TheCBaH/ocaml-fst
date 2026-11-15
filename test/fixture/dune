@@ -1,0 +1,14 @@
+; Test-only builder of minimal FST files (stored sections only), for fixtures that mutating the
+; corpus cannot produce. It is not part of the package.
+
+(library
+ (name fst_fixture)
+ (modules fst_fixture))
+
+(test
+ (name test_fixture)
+ (modules test_fixture)
+ (libraries fst fst_fixture)
+ (deps ../reference/fst_ref_a2.exe)
+ (action
+  (run %{test} %{dep:../reference/fst_ref_a2.exe})))

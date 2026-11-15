@@ -124,7 +124,9 @@ val iter_changes :
     [packed h bytes off width], when given, receives each changed vector that the file stores as
     0 and 1 only, instead of [sink.vector]: [(width + 7) / 8] bytes, most significant bit
     first, valid only during the call. Vectors with other values, the frame's vectors, reals and
-    strings go to the sink as before. *)
+    strings go to the sink as before.
+
+    An exception raised by the sink, [Exit] included, propagates to the caller. *)
 
 type reader
 (** The value changes of a file, read one value change block at a time, so that only that
@@ -143,7 +145,7 @@ val reader :
 val step : reader -> (bool, Error.t) result
 (** Passes the changes of the next value change block to the sink, which is only called
     from [step]. [Ok false] when no block remains. After an error, or an exception raised by
-    the sink, no block remains. Together, the steps make the same calls as {!iter_changes}. *)
+    the sink (which propagates, as from {!iter_changes}), no block remains. Together, the steps make the same calls as {!iter_changes}. *)
 
 type block = { start_time : int64; end_time : int64; pos : int }
 (** A value change block: the times in its header and its file offset. *)
@@ -205,9 +207,16 @@ end
 (* Internals for the tests. *)
 module Private : sig
   val fastlz : string -> size:int -> string option
+  val zlib : string -> off:int -> len:int -> size:int -> (string, Error.t) result
 
-  val of_reader : length:int64 -> read:(int64 -> int -> string) -> (t, Error.t) result
-  (** A file over [read pos len], which returns [len] bytes or fewer at the end. *)
+  val of_reader :
+    ?close:(unit -> unit) ->
+    length:int64 ->
+    read:(int64 -> int -> string) ->
+    unit ->
+    (t, Error.t) result
+  (** A file over [read pos len], which returns [len] bytes or fewer at the end. [close] is
+      called exactly once: by {!close}, or by [of_reader] itself if opening fails. *)
 
   val vcd_id : int -> string
   val timescale : int -> string

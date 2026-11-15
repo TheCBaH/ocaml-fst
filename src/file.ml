@@ -94,9 +94,7 @@ let parse_blackouts data b =
       t := Int64.add !t (Bin_reader.varint r what);
       (!t, on))
 
-let scan src =
-  let first = src.read 0L 1 in
-  let src = if first = "\xfe" then of_string (gunzip_file src) else src in
+let index src =
   let header = ref None and incomplete = ref false in
   let vc = ref [] and vc_count = ref 0 and skip_seen = ref false in
   let geometry = ref None and hier = ref None and hier_kinds = ref (false, false) in
@@ -156,6 +154,41 @@ let scan src =
         hier;
         blackouts = !blackouts;
       }
+
+(* Closes the underlying source once, however often it is called; later reads fail. *)
+let guarded src =
+  let closed = ref false in
+  {
+    src with
+    read = (fun pos len -> if !closed then Error.fail Io pos "file is closed" else src.read pos len);
+    close =
+      (fun () ->
+        if not !closed then begin
+          closed := true;
+          src.close ()
+        end);
+  }
+
+(* Takes ownership of [src]: it is closed here if the file cannot be opened, and as soon as a
+   compressed wrapper has been inflated into memory. *)
+let scan src =
+  let src = guarded src in
+  match
+    if src.read 0L 1 = "\xfe" then begin
+      let inflated = of_string (gunzip_file src) in
+      src.close ();
+      guarded inflated
+    end
+    else src
+  with
+  | exception e ->
+      src.close ();
+      raise e
+  | src -> (
+      try index src
+      with e ->
+        src.close ();
+        raise e)
 
 (* Widths per handle: reals are 0, zero-length variables 0xFFFFFFFF. *)
 let geometry t =
@@ -222,39 +255,50 @@ let block_times src b =
   let e = Bin_reader.u64 r what in
   (s, e)
 
-(* The first and last change times of a value change block, from its time table alone; [None]
-   for a block without changes. *)
-let block_time_ends src b =
+type time_table = { tpos : int; clen : int; times : int64 array }
+
+(* A value change block's time table, the one parser for every entry point. [read off len]
+   returns bytes of the block counted from after its type byte: the 24-byte trailer at the end
+   gives the table's sizes, and an invalid one is [Malformed] (libfst abandons the file there). *)
+let time_table b ~read =
   let what = "time table" in
   if Int64.compare b.seclen 56L < 0 || Int64.compare b.seclen (Int64.of_int max_int) > 0 then
     Error.fail Truncated b.pos "value change block";
   let len = Int64.to_int b.seclen in
   let data_pos = Int64.add b.pos 1L in
   let tr_pos = Int64.add data_pos (Int64.of_int (len - 24)) in
-  let tr = Bin_reader.create ~base:tr_pos (read_exact src tr_pos 24 what) in
+  let tr = Bin_reader.create ~base:tr_pos (read (len - 24) 24) in
   let uclen = Bin_reader.to_int tr what (Bin_reader.u64 tr what) in
   let clen64 = Bin_reader.u64 tr what in
   let nitems64 = Bin_reader.u64 tr what in
   if Int64.compare clen64 b.seclen > 0 || Int64.compare clen64 0L < 0 then
-    Error.fail Malformed tr_pos "%s" what;
+    Error.fail Malformed tr_pos "%s: %Lu bytes" what clen64;
   let clen = Int64.to_int clen64 in
   let tpos = len - 24 - clen in
   if tpos < 32 then Error.fail Truncated b.pos "%s" what;
   if Int64.compare nitems64 0L < 0 || Int64.compare nitems64 (Int64.of_int uclen) > 0 then
     Error.fail Malformed tr_pos "%s: %Lu items" what nitems64;
   let nitems = Int64.to_int nitems64 in
-  if nitems = 0 then None
-  else begin
-    let off = Int64.add data_pos (Int64.of_int tpos) in
-    let raw = read_exact src off clen what in
-    let u =
-      if uclen <> clen then Codec.zlib ~what ~offset:off raw ~off:0 ~len:clen ~size:uclen else raw
-    in
-    let r = Bin_reader.create ~base:off u in
-    let t = ref 0L and first = ref 0L in
-    for i = 0 to nitems - 1 do
-      t := Int64.add !t (Bin_reader.varint r what);
-      if i = 0 then first := !t
-    done;
-    Some (!first, !t)
-  end
+  let off = Int64.add data_pos (Int64.of_int tpos) in
+  let raw = read tpos clen in
+  let u =
+    if uclen <> clen then Codec.zlib ~what ~offset:off raw ~off:0 ~len:clen ~size:uclen else raw
+  in
+  let r = Bin_reader.create ~base:off u in
+  let t = ref 0L in
+  let times =
+    Array.init nitems (fun _ ->
+        t := Int64.add !t (Bin_reader.varint r what);
+        !t)
+  in
+  { tpos; clen; times }
+
+(* The first and last change times of a value change block, from its time table alone; [None]
+   for a block without changes. *)
+let block_time_ends src b =
+  let what = "time table" in
+  let data_pos = Int64.add b.pos 1L in
+  let read off len = read_exact src (Int64.add data_pos (Int64.of_int off)) len what in
+  match (time_table b ~read).times with
+  | [||] -> None
+  | times -> Some (times.(0), times.(Array.length times - 1))

@@ -52,12 +52,9 @@ end
 
 type t = File.t
 
-let io_error fmt =
-  Printf.ksprintf (fun m -> Err.E { Err.kind = Err.Io; offset = -1L; message = m }) fmt
-
 let open_file path =
   Err.catch (fun () ->
-      let ic = try open_in_bin path with Sys_error m -> raise (io_error "%s" m) in
+      let ic = open_in_bin path in
       try File.scan (File.of_channel ic)
       with e ->
         close_in_noerr ic;
@@ -88,6 +85,7 @@ let signals t =
   let base = match t.File.hier with Some b -> b.pos | None -> -1L in
   H.fold ~base (File.hierarchy_data t) ~init:() ~f:(fun () -> function
     | H.Var { var_type; length; alias = false; _ } ->
+        H.check_real ~base ~var_type ~length;
         lens := length :: !lens;
         reals := H.is_real var_type :: !reals
     | _ -> ());
@@ -200,8 +198,11 @@ module Private = struct
     | Some n -> Some (Bytes.sub_string dst 0 n)
     | None -> None
 
-  let of_reader ~length ~read =
-    Err.catch (fun () -> File.scan { File.length; read; close = ignore })
+  let zlib s ~off ~len ~size =
+    Err.catch (fun () -> Codec.zlib ~what:"zlib" ~offset:0L s ~off ~len ~size)
+
+  let of_reader ?(close = ignore) ~length ~read () =
+    Err.catch (fun () -> File.scan { File.length; read; close })
 
   let vcd_id = V.id
   let timescale = V.timescale

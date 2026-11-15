@@ -150,6 +150,7 @@ let definitions ~extensions (file : File.t) b =
       | Var { var_type; name; length; handle; alias; _ } ->
           let real = Hier.is_real var_type in
           if not alias then begin
+            Hier.check_real ~base ~var_type ~length;
             Growable.push lens length;
             Growable.push reals real;
             Growable.push ports (var_type = Hier.vt_port)

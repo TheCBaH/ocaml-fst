@@ -25,4 +25,8 @@ let pp ppf t =
   | None -> Format.fprintf ppf "fst: %s: %s" (kind_to_string t.kind) t.message
 
 let to_string t = Format.asprintf "%a" pp t
-let catch f = try Ok (f ()) with E e -> Error e
+
+let catch f =
+  try Ok (f ()) with
+  | E e -> Error e
+  | Sys_error message -> Error { kind = Io; offset = -1L; message }

@@ -54,8 +54,13 @@ reader crash. Parallel mode changes how blocks are written, not their format.
 Malformed input raises `Error.E` internally and returns `Error` at the API. Where libfst
 silently abandons a block (`goto block_err`: an inconsistent chain table or a traversal buffer
 overrun), so does this reader; where libfst aborts or reads out of bounds, this reader returns
-an error. Every decoded size is checked against the codec's best ratio (zlib 1032:1, LZ4 and
-FastLZ 256:1) before any allocation, and the traversal buffer grows only as data arrives, so a
+an error. The time table is the exception: libfst `break`s out of the block loop, without an
+error, when a block's trailer is invalid (its compressed size exceeds the block). Here that is
+`Malformed` from every entry point, so a damaged file cannot look like a short one. `blocks`
+reads only 16 bytes per block, so the error appears when the block is decoded.
+
+Every decoded size is checked against the codec's best ratio (zlib 1032:1, LZ4 and FastLZ
+256:1) before any allocation, and the traversal buffer grows only as data arrives, so a
 corrupt size field cannot cause a large allocation.
 
 Times, file offsets and 64-bit header fields are `int64`; sizes inside a block are `int`, so on
