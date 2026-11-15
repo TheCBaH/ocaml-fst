@@ -1,0 +1,5 @@
+; Benchmarks, not part of the package and not run by runtest: `make bench`.
+
+(executable
+ (name bench)
+ (libraries fst fst_fixture unix))
