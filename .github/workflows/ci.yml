@@ -7,11 +7,20 @@ name: ci
 # files are generated at build time. The 64-bit legs ("full") also convert the output of a real
 # Verilator simulation. The 32-bit legs run the native suite, which proves 31-bit native-int
 # safety, on a corpus written by the 32-bit build of libfst.
+#
+# Two more jobs run on amd64 only. "install" is `make install-test`: opam installs a git archive
+# (no submodule) in a new switch with a fresh compiler, so dune, zipc and unlz4 come from opam
+# and fst.opam's pin-depends. "doc" is `make doc`: `dune build @doc`, where an odoc warning fails.
 
 on:
   push:
   pull_request:
   workflow_dispatch:
+
+# A newer push to the same ref supersedes a running one, except on main.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
   matrix:
@@ -70,3 +79,56 @@ jobs:
       if: matrix.full
       run: |
         ${{ env.EXEC }} make verilator-test
+  install:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        ocaml_version: ["4.14.4", "5.4.1"]
+    steps:
+    - name: checkout
+      uses: actions/checkout@v7
+    - name: devcontainer
+      uses: TheCBaH/devcontainer-action/devcontainer@v1
+      id: devcontainer
+      env:
+        OCAML_VERSION: ${{ matrix.ocaml_version }}
+      with:
+        variant: ${{ matrix.ocaml_version }}
+        platform: linux/amd64
+        password: ${{ secrets.GITHUB_TOKEN }}
+    - name: setup
+      run: |
+        echo 'EXEC=${{ steps.devcontainer.outputs.exec }}' >> $GITHUB_ENV
+    - name: install-test
+      run: |
+        ${{ env.EXEC }} make install-test
+  doc:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
+    steps:
+    - name: checkout
+      uses: actions/checkout@v7
+    - name: devcontainer
+      uses: TheCBaH/devcontainer-action/devcontainer@v1
+      id: devcontainer
+      env:
+        OCAML_VERSION: 4.14.4
+      with:
+        variant: 4.14.4
+        platform: linux/amd64
+        password: ${{ secrets.GITHUB_TOKEN }}
+    - name: setup
+      run: |
+        echo 'EXEC=${{ steps.devcontainer.outputs.exec }}' >> $GITHUB_ENV
+    - name: odoc
+      run: |
+        ${{ env.EXEC }} sh -c 'opam install . --deps-only --with-doc -y'
+    - name: doc
+      run: |
+        ${{ env.EXEC }} make doc

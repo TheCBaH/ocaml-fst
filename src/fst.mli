@@ -18,7 +18,7 @@
 
     {1 Domains and threads}
 
-    Nothing here is thread-safe. A {!t}, the {!reader}s made from it and their sinks belong to one
+    Nothing here is thread-safe. A {!t}, the {!type-reader}s made from it and their sinks belong to one
     domain or thread at a time: the handle caches {!signals} and reads its source through a
     position the readers share. Separate handles share no state and may be used from separate
     domains.
@@ -26,9 +26,9 @@
     {1 Lifetime}
 
     {!close} ends the use of a handle, and is harmless when repeated. Afterwards every function
-    that takes the handle, or a {!reader} made from it, returns [Error Io] ("file is closed");
+    that takes the handle, or a {!type-reader} made from it, returns [Error Io] ("file is closed");
     this holds even where the answer is cached, and the sink gets no call. {!header} and
-    {!blackouts} return what was read when the file was opened, so they still work. A {!reader}
+    {!blackouts} return what was read when the file was opened, so they still work. A {!type-reader}
     reads from the handle when stepped, so one that outlives {!close} fails at its next {!step},
     and dropping one needs no cleanup. The
     bytes passed to a sink are valid only during the call. An exception from a sink ends that
@@ -214,9 +214,9 @@ val reader_at :
   sink ->
   block:int ->
   (reader, Error.t) result
-(** A {!reader} that starts at the [block]th of {!blocks} (0-based). [select] and [packed] are as in {!reader}.
+(** A {!type-reader} that starts at the [block]th of {!blocks} (0-based). [select] and [packed] are as in {!val-reader}.
 
-    [block = 0] is {!reader}. For a later block, the calls are those of libfst's time-limited read
+    [block = 0] is {!val-reader}. For a later block, the calls are those of libfst's time-limited read
     from that block ([fstReaderSetLimitTimeRange]). The first step first passes a frame: [frame]
     with the block's start time and every selected handle's value after all changes of the
     earlier blocks and before any of this block's, including the selected string variables'
@@ -235,7 +235,7 @@ val reader_at :
     [block]th, as libfst's time-limited read does not, so that block's changes for such a handle
     are missing.
 
-    @raise Invalid_argument if there is no such block: a bad argument is a caller error, not bad input. *)
+    Raises [Invalid_argument] if there is no such block: a bad argument is a caller error, not bad input. *)
 
 val aligned_block : t -> int -> (int, Error.t) result
 (** [aligned_block t k] is the largest [j <= k] such that no time step has changes both in block
@@ -243,13 +243,13 @@ val aligned_block : t -> int -> (int, Error.t) result
     The blocks' time tables decide it, except where a block's first time is the one an earlier
     block ended on: those blocks are then decoded to see whether both have changes there.
 
-    @raise Invalid_argument if [k] is not the index of a block, as for {!reader_at}. *)
+    Raises [Invalid_argument] if [k] is not the index of a block, as for {!reader_at}. *)
 
 (** VCD output, and the same content as events. *)
 module Vcd : sig
   val write : ?extensions:bool -> t -> out_channel -> (unit, Error.t) result
   (** Writes what libfst's [fst2vcd] writes; [extensions] is its [-e] (attributes as
-      [$attrbegin]). It is {!events} printed. *)
+      [$attrbegin]). It is {!val-events} printed. *)
 
   val to_string : ?extensions:bool -> t -> (string, Error.t) result
 
@@ -300,7 +300,7 @@ module Vcd : sig
     definition : definition -> unit;
     time : int64 -> unit;  (** [#time]: the changes that follow are at this time. *)
     frame : int64 -> unit;
-        (** Only from a {!reader} with [~block] above 0: the values of the block's frame follow
+        (** Only from a {!val-reader} with [~block] above 0: the values of the block's frame follow
             at this time, up to the next [time], which is the block's first. *)
     dump : marker -> unit;
         (** [Dumpvars], [Dumpon] and [Dumpoff] come right after the [time] they are at, before its
@@ -333,16 +333,16 @@ module Vcd : sig
       The handle stays usable. *)
 
   type reader
-  (** {!events}, read one step at a time. *)
+  (** {!val-events}, read one step at a time. *)
 
   val reader :
     ?extensions:bool -> ?select:(int -> bool) -> ?block:int -> t -> sink -> (reader, Error.t) result
   (** Reads the hierarchy and calls nothing yet. With [block] above 0 it starts at that block of
-      {!blocks} as {!reader_at} does and the output differs from {!events}': there is no
+      {!blocks} as {!reader_at} does and the output differs from {!val-events}': there is no
       [Dumpvars], the first change block's [frame] stands for its time step's [#time] and
       the blackouts before the block's first time are dropped. The definitions are still passed.
 
-      @raise Invalid_argument if [block] is given and there is no such block, as for
+      Raises [Invalid_argument] if [block] is given and there is no such block, as for
       {!reader_at}. *)
 
   val step : reader -> (bool, Error.t) result
