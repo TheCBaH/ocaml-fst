@@ -85,4 +85,40 @@ let () =
   check (Printf.sprintf "huge dest allocated %.0f bytes" allocated) (allocated < 1e6);
   Fst.close t
 
+(* N3 / D1: an invalid time-table trailer is an error from every entry point. *)
+let () =
+  let spec =
+    F.make
+      [ F.signal "a" F.Bit; F.signal "s" F.String ]
+      [
+        F.block ~times:[ 10L; 20L ] [ (0, 1, F.B '1'); (1, 2, F.S "x") ];
+        F.block ~times:[ 20L; 30L ] [ (0, 1, F.B '0'); (1, 2, F.S "y") ];
+        F.block ~times:[ 40L; 50L ] [ (0, 1, F.B '1') ];
+      ]
+  in
+  let t = open_ spec in
+  check "valid file" (Fst.iter_changes t sink = Ok ());
+  Fst.close t;
+  let at_block name f =
+    List.iter
+      (fun k ->
+        let bad = f (F.set_trailer spec ~block:k) in
+        let name = Printf.sprintf "%s in block %d" name k in
+        entry_points name Fst.Error.Malformed bad;
+        let t = open_ bad in
+        (match Fst.blocks t with
+        | Ok bs -> check (name ^ ": blocks lists all") (Array.length bs = 3)
+        | Error _ -> check (name ^ ": blocks failed") false);
+        expect (name ^ " aligned_block") Fst.Error.Malformed (fun () ->
+            Result.map ignore (Fst.aligned_block t (max k 1)));
+        (* The reader at block 2 replays the string variable of the earlier blocks. *)
+        expect (name ^ " reader_at 2") Fst.Error.Malformed (fun () ->
+            Result.bind (Fst.reader_at t sink ~block:2) drain);
+        Fst.close t)
+      [ 0; 1 ]
+  in
+  at_block "clen beyond the block" (fun set -> set ~uclen:2 ~clen:100000 ~nitems:2);
+  at_block "negative-sized clen" (fun set -> set ~uclen:2 ~clen:(-1) ~nitems:2);
+  at_block "more items than bytes" (fun set -> set ~uclen:2 ~clen:2 ~nitems:3)
+
 let () = if !failures > 0 then exit 1

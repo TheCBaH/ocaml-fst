@@ -187,31 +187,10 @@ let block ~(file : File.t) ~signals ~mask ~packed ~recovered ~sink st ~secnum (b
   let beg_tim = Bin_reader.u64 r what in
   let _end_tim = Bin_reader.u64 r what in
   let mem_required = Bin_reader.u64 r what in
-  (* Time table, at the end of the block. *)
-  if len < 24 + 32 then Error.fail Truncated b.pos "%s" what;
-  let tr = Bin_reader.create ~base ~pos:(len - 24) data in
-  let tsec_uclen = Bin_reader.to_int tr what (Bin_reader.u64 tr what) in
-  let tsec_clen64 = Bin_reader.u64 tr what in
-  let tsec_nitems = Bin_reader.u64 tr what in
-  if Int64.compare tsec_clen64 b.seclen > 0 || Int64.compare tsec_clen64 0L < 0 then raise Exit;
-  let tsec_clen = Int64.to_int tsec_clen64 in
-  let tpos = len - 24 - tsec_clen in
-  if tpos < 32 then Error.fail Truncated b.pos "%s: time table" what;
-  let tdata =
-    if tsec_uclen <> tsec_clen then
-      Codec.zlib ~what:"time table" ~offset:(at tpos) data ~off:tpos ~len:tsec_clen ~size:tsec_uclen
-    else String.sub data tpos tsec_uclen
+  let { File.tpos; clen = tsec_clen; times = time_table } =
+    File.time_table b ~read:(fun off n -> String.sub data off n)
   in
-  if Int64.compare tsec_nitems 0L < 0 || Int64.compare tsec_nitems (Int64.of_int tsec_uclen) > 0
-  then Error.fail Malformed (at tpos) "time table: %Lu items" tsec_nitems;
-  let nitems = Int64.to_int tsec_nitems in
-  let tt = Bin_reader.create ~base:(at tpos) tdata in
-  let tv = ref 0L in
-  let time_table =
-    Array.init nitems (fun _ ->
-        tv := Int64.add !tv (Bin_reader.varint tt "time table");
-        !tv)
-  in
+  let nitems = Array.length time_table in
   let tc_items = max nitems 1 in
   let tc_head = Array.make tc_items 0 in
   (* Frame: the values at the start of the block, emitted for the first block only. *)
