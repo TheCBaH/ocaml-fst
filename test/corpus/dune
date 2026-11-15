@@ -4,13 +4,18 @@
 
 (executables
  (names test_corpus robust digests)
- (libraries fst))
+ (libraries fst time_range))
 
 (rule
  (alias runtest)
- (deps %{project_root}/test/reference/corpus)
+ (deps
+  %{project_root}/test/reference/corpus
+  %{project_root}/test/reference/fst_ref_a2.exe)
  (action
-  (run %{exe:test_corpus.exe} %{project_root}/test/reference/corpus)))
+  (run
+   %{exe:test_corpus.exe}
+   %{project_root}/test/reference/corpus
+   %{project_root}/test/reference/fst_ref_a2.exe)))
 
 (rule
  (alias runtest)

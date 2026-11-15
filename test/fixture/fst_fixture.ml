@@ -24,13 +24,16 @@ type block = {
   chain_dest : (int * int) list;
   chain_table : string option;
   trailer : (int * int * int) option;
+  aliases : (int * int) list;
+  max_handle : int option;
+  typ : int;
 }
 
 type t = { timescale : int; scope : string; signals : signal list; blocks : block list }
 
 let signal ?alias name kind = { name; kind; alias; decl_len = None; var_type = None }
 
-let block ?start ?(frame = []) ~times changes =
+let block ?start ?(frame = []) ?(aliases = []) ?max_handle ?typ ~times changes =
   let first = match times with t :: _ -> t | [] -> 0L in
   let last = List.fold_left (fun _ t -> t) first times in
   {
@@ -44,6 +47,9 @@ let block ?start ?(frame = []) ~times changes =
     chain_dest = [];
     chain_table = None;
     trailer = None;
+    aliases;
+    max_handle;
+    typ = (match typ with Some t -> t | None -> if aliases = [] then 1 else 5);
   }
 
 let make ?(timescale = -9) signals blocks = { timescale; scope = "top"; signals; blocks }
@@ -242,8 +248,15 @@ let vc_block t (b : block) =
             let dest = Option.value (List.assoc_opt (i + 1) b.chain_dest) ~default:0 in
             Some (varint dest ^ payload, String.length payload))
   in
+  let aliased i = List.mem_assoc (i + 1) b.aliases in
   let vc_maxhandle =
-    Array.fold_left (fun (i, m) c -> (i + 1, if c <> None then i + 1 else m)) (0, 0) chains |> snd
+    match b.max_handle with
+    | Some n -> n
+    | None ->
+        Array.fold_left
+          (fun (i, m) c -> (i + 1, if c <> None || aliased i then i + 1 else m))
+          (0, 0) chains
+        |> snd
   in
   let body = Buffer.create 256 in
   let off = ref 1 and prev = ref 0 and zeros = ref 0 and table = Buffer.create 16 in
@@ -252,15 +265,19 @@ let vc_block t (b : block) =
     zeros := 0
   in
   for i = 0 to vc_maxhandle - 1 do
-    match chains.(i) with
-    | None -> incr zeros
-    | Some (c, _) ->
+    match (List.assoc_opt (i + 1) b.aliases, chains.(i)) with
+    | Some target, _ ->
+        flush ();
+        Buffer.add_string table (varint 0 ^ varint target)
+    | None, None -> incr zeros
+    | None, Some (c, _) ->
         flush ();
         Buffer.add_string table (varint (((!off - !prev) lsl 1) lor 1));
         prev := !off;
         off := !off + String.length c;
         Buffer.add_string body c
   done;
+  flush ();
   let table = Option.value b.chain_table ~default:(Buffer.contents table) in
   let mem =
     match b.mem_required with
@@ -282,7 +299,7 @@ let vc_block t (b : block) =
   let uclen, clen, nitems =
     Option.value b.trailer ~default:(String.length tt, String.length tt, List.length b.times)
   in
-  section 1
+  section b.typ
     (String.concat ""
        [
          u64 b.start_time;

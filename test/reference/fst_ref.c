@@ -4,7 +4,9 @@
    dynamic alias, none).
 
      fst_ref corpus DIR           write DIR/VARIANT_*.fst, .vcd and .ext.vcd (-e)
-     fst_ref vcd [-e] FST VCD     convert one file */
+     fst_ref vcd [-e] FST VCD     convert one file
+     fst_ref calls FST [START]    print the value changes libfst's callbacks report, one per line;
+                                  with START, only the blocks that end at START or later */
 
 #include <errno.h>
 #include <math.h>
@@ -45,6 +47,79 @@ static int to_vcd(const char *fst, const char *vcd, int extensions)
     fstReaderIterBlocks(xc, NULL, NULL, fv);
     fstReaderClose(xc);
     fclose(fv);
+    return 0;
+}
+
+/* What the callback API reports, one change per line: "time handle v:CHARS" (a bit or vector, as
+   libfst passes it), "r:HEX64" (the double's bytes) or "s:HEX" (a string variable). The frame of
+   a block read first is reported at its start time. */
+struct calls
+{
+    unsigned n;
+    unsigned char *real;
+};
+
+static void on_change(void *user, uint64_t time, fstHandle h, const unsigned char *value)
+{
+    const struct calls *c = user;
+
+    if (h < 1 || h > c->n) {
+        fprintf(stderr, "fst_ref: handle %u out of range\n", (unsigned)h);
+        exit(1);
+    }
+    if (c->real[h - 1]) {
+        uint64_t bits;
+        memcpy(&bits, value, sizeof bits);
+        printf("%llu %u r:%016llx\n", (unsigned long long)time, (unsigned)h,
+               (unsigned long long)bits);
+    } else {
+        printf("%llu %u v:%s\n", (unsigned long long)time, (unsigned)h, (const char *)value);
+    }
+}
+
+static void on_varlen(void *user, uint64_t time, fstHandle h, const unsigned char *value,
+                      uint32_t len)
+{
+    (void)user;
+    printf("%llu %u s:", (unsigned long long)time, (unsigned)h);
+    for (uint32_t i = 0; i < len; i++)
+        printf("%02x", value[i]);
+    printf("\n");
+}
+
+/* [limit] is the start of fstReaderSetLimitTimeRange, which skips the blocks that end before it. */
+static int to_calls(const char *fst, const uint64_t *limit)
+{
+    fstReaderContext *xc = fstReaderOpen(fst);
+    struct calls c;
+    struct fstHier *h;
+
+    if (!xc) {
+        fprintf(stderr, "fst_ref: cannot open %s\n", fst);
+        return 1;
+    }
+    if (!fstReaderProcessHier(xc, NULL)) {
+        fprintf(stderr, "fst_ref: no hierarchy in %s\n", fst);
+        fstReaderClose(xc);
+        return 1;
+    }
+    c.n = (unsigned)fstReaderGetMaxHandle(xc);
+    c.real = calloc(c.n + 1, 1);
+    while ((h = fstReaderIterateHier(xc))) {
+        if (h->htyp == FST_HT_VAR && !h->u.var.is_alias && h->u.var.handle >= 1 &&
+            h->u.var.handle <= c.n) {
+            unsigned char t = h->u.var.typ;
+            c.real[h->u.var.handle - 1] = t == FST_VT_VCD_REAL || t == FST_VT_VCD_REAL_PARAMETER ||
+                                          t == FST_VT_VCD_REALTIME || t == FST_VT_SV_SHORTREAL;
+        }
+    }
+    fstReaderSetFacProcessMaskAll(xc);
+    fstReaderIterBlocksSetNativeDoublesOnCallback(xc, 1);
+    if (limit)
+        fstReaderSetLimitTimeRange(xc, *limit, UINT64_MAX);
+    fstReaderIterBlocks2(xc, on_change, on_varlen, &c, NULL);
+    fstReaderClose(xc);
+    free(c.real);
     return 0;
 }
 
@@ -414,6 +489,21 @@ int main(int argc, char **argv)
         return to_vcd(argv[2], argv[3], 0);
     if (argc == 5 && !strcmp(argv[1], "vcd") && !strcmp(argv[2], "-e"))
         return to_vcd(argv[3], argv[4], 1);
-    fprintf(stderr, "usage: fst_ref corpus DIR | fst_ref vcd [-e] FST VCD\n");
+    if (argc == 3 && !strcmp(argv[1], "calls"))
+        return to_calls(argv[2], NULL);
+    if (argc == 4 && !strcmp(argv[1], "calls")) {
+        char *end;
+        unsigned long long start;
+
+        errno = 0;
+        start = strtoull(argv[3], &end, 10);
+        if (errno || *end || end == argv[3]) {
+            fprintf(stderr, "fst_ref: bad start time %s\n", argv[3]);
+            return 2;
+        }
+        return to_calls(argv[2], &(uint64_t){start});
+    }
+    fprintf(stderr,
+            "usage: fst_ref corpus DIR | fst_ref vcd [-e] FST VCD | fst_ref calls FST [START]\n");
     return 2;
 }

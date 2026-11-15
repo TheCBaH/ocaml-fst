@@ -316,4 +316,157 @@ let () =
   check "the file is still usable" (Fst.iter_changes t sink = Ok ());
   Fst.close t
 
+(* S4: seeks share per-block checkpoints, and a seek gives what a fresh handle's gives, whatever
+   the order of the seeks, the error of a damaged earlier block included. *)
+let seek_result ?select t k =
+  let calls = ref [] in
+  let add h fmt = Printf.ksprintf (fun s -> calls := Printf.sprintf "%d:%s" h s :: !calls) fmt in
+  let sink =
+    {
+      Fst.time = (fun t -> add 0 "#%Lu" t);
+      frame = (fun t -> add 0 "frame %Lu" t);
+      bit = (fun h c -> add h "%c" c);
+      vector = (fun h b off len -> add h "b%s" (Bytes.sub_string b off len));
+      real = (fun h d -> add h "r%g" d);
+      varlen = (fun h b off len -> add h "s%S" (Bytes.sub_string b off len));
+    }
+  in
+  match Result.bind (Fst.reader_at ?select t sink ~block:k) drain with
+  | Ok () -> Ok (List.rev !calls)
+  | Error e -> Error (Fst.Error.to_string e)
+
+let same_as_fresh ?select name spec seeks =
+  let t = open_ spec in
+  List.iter
+    (fun k ->
+      let fresh = open_ spec in
+      check
+        (Printf.sprintf "%s: seek %d after %s equals a fresh handle's" name k
+           (String.concat "," (List.map string_of_int seeks)))
+        (seek_result ?select t k = seek_result ?select fresh k);
+      Fst.close fresh)
+    seeks;
+  Fst.close t
+
+let () =
+  let strings n = List.init n (fun i -> F.signal (Printf.sprintf "s%d" (i + 1)) F.String) in
+  let str t h v = (t, h, F.S v) in
+  (* The stale-alias fixture of test_fixture, with string variables: block 1 resolves handle 5 as
+     the alias of handle 2, which still has its negative length from block 0. *)
+  let stale =
+    F.make (strings 5)
+      [
+        F.block
+          ~aliases:[ (2, 4); (5, 2) ]
+          ~times:[ 10L; 20L ]
+          [ str 0 1 "a"; str 0 4 "b"; str 1 4 "c" ];
+        F.block ~max_handle:5 ~times:[ 30L; 40L ] [ str 0 1 "d"; str 0 4 "e"; str 1 4 "f" ];
+        F.block ~times:[ 50L; 60L ] [ str 0 1 "g" ];
+        F.block ~times:[ 70L ] [ str 0 1 "h" ];
+      ]
+  in
+  List.iter
+    (same_as_fresh "stale strings" stale)
+    [ [ 1; 2; 3 ]; [ 3; 2; 1 ]; [ 2; 1; 3 ]; [ 3; 3; 1; 2; 2 ]; [ 1; 3; 2; 3 ] ];
+  let t = open_ stale in
+  ignore (seek_result t 1);
+  (match seek_result t 2 with
+  | Ok calls ->
+      check "stale strings: seek 2 recovers handle 5 through the carried negative length"
+        (List.exists (fun c -> String.length c > 2 && String.sub c 0 2 = "5:") calls)
+  | Error e -> check ("stale strings: " ^ e) false);
+  Fst.close t;
+  (* Another selection on the same handle has its own checkpoints. *)
+  let t = open_ stale in
+  let odd h = h land 1 = 1 in
+  List.iter
+    (fun (select, k) ->
+      let fresh = open_ stale in
+      check
+        (Printf.sprintf "stale strings: mixed selections, seek %d" k)
+        (seek_result ?select t k = seek_result ?select fresh k);
+      Fst.close fresh)
+    [
+      (Some odd, 3); (None, 2); (Some odd, 2); (Some (fun h -> h = 4), 3); (None, 3); (Some odd, 1);
+    ];
+  Fst.close t
+
+(* A seek reads on to the end, but decodes the blocks before its own once: a later seek does not
+   read the ones a checkpoint covers. *)
+let () =
+  let spec =
+    F.make
+      [ F.signal "a" F.Bit; F.signal "s" F.String ]
+      (List.init 6 (fun i ->
+           let t0 = Int64.of_int ((20 * i) + 10) in
+           F.block
+             ~times:[ t0; Int64.add t0 10L ]
+             [ (0, 1, F.B '1'); (1, 2, F.S (String.make (i + 1) 'x')) ]))
+  in
+  let data = F.build spec in
+  let log = ref [] in
+  let read pos len =
+    log := pos :: !log;
+    let p = Int64.to_int pos in
+    if p >= String.length data then "" else String.sub data p (min len (String.length data - p))
+  in
+  match Fst.Private.of_reader ~length:(Int64.of_int (String.length data)) ~read () with
+  | Error e -> check (Fst.Error.to_string e) false
+  | Ok t -> (
+      match Fst.blocks t with
+      | Error e -> check (Fst.Error.to_string e) false
+      | Ok bs ->
+          ignore (Fst.signals t);
+          let decoded = Array.make (Array.length bs) 0 in
+          let seek k =
+            log := [];
+            check "counted seek" (seek_result t k <> Error "");
+            List.iter
+              (fun pos ->
+                Array.iteri
+                  (fun j (b : Fst.block) ->
+                    if Int64.equal pos (Int64.succ b.pos) then decoded.(j) <- decoded.(j) + 1)
+                  bs)
+              !log
+          in
+          let counts name expected =
+            check
+              (Printf.sprintf "%s: blocks decoded %s, expected %s" name
+                 (String.concat "," (Array.to_list (Array.map string_of_int decoded)))
+                 (String.concat "," (List.map string_of_int expected)))
+              (Array.to_list decoded = expected)
+          in
+          seek 4;
+          counts "seek 4" [ 1; 1; 1; 1; 1; 1 ];
+          seek 4;
+          counts "seek 4 again" [ 1; 1; 1; 1; 2; 2 ];
+          seek 5;
+          counts "seek 5" [ 1; 1; 1; 1; 3; 3 ];
+          seek 2;
+          counts "seek 2" [ 1; 1; 2; 2; 4; 4 ];
+          Fst.close t)
+
+(* A damaged earlier block fails every seek past it with the same error, and is not cached as
+   read. *)
+let () =
+  let spec =
+    F.make
+      [ F.signal "a" F.Bit; F.signal "s" F.String ]
+      (List.init 5 (fun i ->
+           let t0 = Int64.of_int ((20 * i) + 10) in
+           F.block
+             ~times:[ t0; Int64.add t0 10L ]
+             [ (0, 1, F.B '1'); (1, 2, F.S (String.make (i + 1) 'x')) ]))
+  in
+  let bad = F.set_trailer spec ~block:2 ~uclen:2 ~clen:100000 ~nitems:2 in
+  List.iter
+    (same_as_fresh "damaged block 2" bad)
+    [ [ 3; 4; 3; 1; 4 ]; [ 4; 3; 2; 1; 0 ]; [ 1; 2; 3; 4 ] ];
+  let t = open_ bad in
+  (match seek_result t 3 with
+  | Error m -> check "damaged block 2: Malformed" (m <> "")
+  | Ok _ -> check "damaged block 2: seek 3 Ok" false);
+  check "damaged block 2: seek 4 fails" (Result.is_error (seek_result t 4));
+  Fst.close t
+
 let () = if !failures > 0 then exit 1

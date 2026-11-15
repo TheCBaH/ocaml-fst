@@ -1,0 +1,6 @@
+; libfst's value changes as reported by its callback API (test/reference), and the same for
+; Fst.reader_at, as comparable records.
+
+(library
+ (name time_range)
+ (libraries fst))

@@ -73,13 +73,36 @@ is opened, and `Fst.blocks` then reads the first 16 bytes after the length for t
 and end times. `reader_at k` starts a `Vc.reader` at block `k`. A value change block's frame holds
 the value of every handle except the string variables at its start, so the first step emits the
 frame and, for the string variables, first runs a prepass: a second reader over blocks `0..k-1`
-that selects only the string handles and keeps the last value of each. The cost of a seek is that of reading every earlier block and decompressing the string
-handles' chains in it. `aligned_block` reads time tables only, and decodes a block when its first
-time equals the previous block's last.
+that selects only the string handles and keeps the last value of each.
 
-Two gaps remain, and are what the seeking phase changes: the prepass's chain-table lengths are
-discarded, while a sequential read carries them across blocks, so a block that depends on them (a
-stale dynamic alias) could differ after a seek; and nothing is remembered between seeks.
+Seeks share checkpoints. `File.t` keeps, for each set of selected string handles, an array
+with the prepass state before every block, filled as seeks pass the boundaries: a seek to `k`
+resumes from the nearest known boundary `j <= k` and reads blocks `j..k-1` only, so seeks in any
+order read each earlier block at most once. A checkpoint holds the last value of each string
+handle that has one (a persistent map, so boundaries share their strings), the size of the chain
+length array and its negative entries (the stale lengths a block can inherit: a resumed prepass
+must see what a continuous one does), and nothing else. A block that fails is not recorded, so
+later seeks past it reread it and fail with the same error. The checkpoints belong to the handle,
+are single-domain like the rest of it, and are dropped by `close`. The cost of a first seek is
+that of reading every earlier block and decompressing the string handles' chains in it.
+
+`aligned_block` reads time tables only, and decodes a block when its first time equals the
+previous block's last.
+
+What `reader_at k` guarantees is what libfst's time-limited read (`fstReaderSetLimitTimeRange`)
+makes from block `k`: a `frame` call, a `time` call for the block's first time even if the
+previous block ended on it, then the block's changes as a sequential read makes them. The
+string variables, which libfst's frame lacks, are the addition: the prepass recovers them. This is
+decision D2 (fallback B): `test/oracle` compares the calls with libfst's for every `k` whose
+start time skips exactly the blocks before it.
+
+There is one documented exception to `reader_at k` making the calls of the sequential suffix. A
+chain table can hold a forward alias, one that names a later handle; libfst's writer never makes
+one, so only a hand-built file does. Its negative length stays in a sequential reader's table and
+a later block that lists the handle as unchanged resolves it. A seek does not carry that length
+into block `k` (libfst's time-limited read does not either), so the handle's changes in `k` are
+missing. `test/fixture/test_fixture.ml` asserts this, against libfst, as an exception, not as a
+defect to fix.
 
 ## Select and packed
 
@@ -101,6 +124,8 @@ reals and strings go to the sink as before.
   that grows to what the selected chains decompress to (never beyond the block's declared memory
   plus 66 bytes, and only as data arrives). Per-handle arrays (`scatter`, `headptr`,
   `remaining`) are sized by the handle count and reused across blocks, as is the traversal buffer.
+- Seek checkpoints (see Seeking) are kept per handle until `close`: one small record per block
+  boundary reached, plus the string values, which boundaries share.
 - Sink arguments are views into those buffers, valid only during the call.
 
 ## libfst compatibility

@@ -24,6 +24,16 @@ let is_vc t = t = bl_vcdata || t = bl_vcdata_dyn_alias || t = bl_vcdata_dyn_alia
 
 type block = { typ : int; pos : int64; seclen : int64 }
 
+module Int_map = Map.Make (Int)
+
+(* What blocks before a boundary leave for later ones, as the seek prepass accumulates it: the
+   last value of each string variable that has one, and the chain length state, which is the size
+   of the length array (it is reallocated, losing its contents, when a block has more handles) and
+   the negative lengths that stale forward aliases leave in it. *)
+type checkpoint = { strings : string Int_map.t; lengths_size : int; negative : (int * int) list }
+
+let start_checkpoint = { strings = Int_map.empty; lengths_size = 0; negative = [] }
+
 type t = {
   src : source;
   header : Header.t;
@@ -33,6 +43,9 @@ type t = {
   mixed_hier : bool;  (** Both a gzip and an LZ4 hierarchy block: libfst takes the last. *)
   blackouts : (int64 * bool) array;
   mutable signals : ((Hier.kind * int) array, Error.t) result option;
+  seeks : (int list, checkpoint option array) Hashtbl.t;
+      (** Per set of selected string handles, the checkpoint before each block, filled by the
+          seeks as they go; [.(0)] is always known. Like the rest of [t], single-domain. *)
   mutable closed : bool;
 }
 
@@ -154,6 +167,7 @@ let index src =
         mixed_hier = !hier_kinds = (true, true);
         blackouts = !blackouts;
         signals = None;
+        seeks = Hashtbl.create 4;
         closed = false;
       }
 
@@ -197,6 +211,7 @@ let check_open t = if t.closed then raise (Error.E closed_error)
 
 let close t =
   t.closed <- true;
+  Hashtbl.reset t.seeks;
   t.src.close ()
 
 (* Widths per handle: reals are 0, zero-length variables 0xFFFFFFFF. *)
