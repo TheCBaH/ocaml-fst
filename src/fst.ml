@@ -95,7 +95,7 @@ let reader ?select ?packed t sink =
 
 let step r = Err.catch (fun () -> Vc.step r)
 
-type block = { start_time : int64; end_time : int64; pos : int }
+type block = { start_time : int64; end_time : int64; pos : int64 }
 
 let blocks (t : t) =
   Err.catch (fun () ->
@@ -103,12 +103,12 @@ let blocks (t : t) =
       Array.map
         (fun (b : File.block) ->
           let start_time, end_time = File.block_times t.src b in
-          { start_time; end_time; pos = Int64.to_int b.pos })
+          { start_time; end_time; pos = b.pos })
         t.vc_blocks)
 
 let check_block (t : t) k =
   if k < 0 || k >= Array.length t.vc_blocks then
-    Err.fail Err.Malformed (-1L) "block %d: the file has %d" k (Array.length t.vc_blocks)
+    invalid_arg (Printf.sprintf "Fst: block %d: the file has %d" k (Array.length t.vc_blocks))
 
 let reader_at ?select ?packed t sink ~block =
   Err.catch (fun () ->

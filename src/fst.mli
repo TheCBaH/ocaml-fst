@@ -164,7 +164,7 @@ val step : reader -> (bool, Error.t) result
     from [step]. [Ok false] when no block remains. After an error, or an exception raised by
     the sink (which propagates, as from {!iter_changes}), no block remains. Together, the steps make the same calls as {!iter_changes}. *)
 
-type block = { start_time : int64; end_time : int64; pos : int }
+type block = { start_time : int64; end_time : int64; pos : int64 }
 (** A value change block: the times in its header and its file offset. *)
 
 val blocks : t -> (block array, Error.t) result
@@ -179,8 +179,7 @@ val reader_at :
   sink ->
   block:int ->
   (reader, Error.t) result
-(** A {!reader} that starts at the [block]th of {!blocks} (0-based; an error if there is none).
-    [select] and [packed] are as in {!reader}.
+(** A {!reader} that starts at the [block]th of {!blocks} (0-based). [select] and [packed] are as in {!reader}.
 
     [block = 0] is {!reader}. For a later block, the first step first passes a frame: [frame]
     with the block's start time and every selected handle's value after all changes of the
@@ -188,13 +187,17 @@ val reader_at :
     (found by reading only those handles' chains in the earlier blocks), then the block's
     changes. [time] is called for the block's first time even when the previous block ended on
     it, so a timestamp that spans the boundary is seen in two parts: use {!aligned_block} to
-    start where none does. *)
+    start where none does. 
+
+    @raise Invalid_argument if there is no such block: a bad argument is a caller error, not bad input. *)
 
 val aligned_block : t -> int -> (int, Error.t) result
 (** [aligned_block t k] is the largest [j <= k] such that no time step has changes both in block
     [j] and in an earlier block (0 if there is none): a reader at [j] then sees whole time steps.
     The blocks' time tables decide it, except where a block's first time is the one an earlier
-    block ended on: those blocks are then decoded to see whether both have changes there. *)
+    block ended on: those blocks are then decoded to see whether both have changes there.
+
+    @raise Invalid_argument if [k] is not the index of a block, as for {!reader_at}. *)
 
 (** VCD output. *)
 module Vcd : sig
