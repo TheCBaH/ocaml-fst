@@ -1,4 +1,4 @@
-(lang dune 3.21)
+(lang dune 3.0)
 
 (name fst)
 
