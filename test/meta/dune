@@ -3,6 +3,8 @@
 
 (test
  (name test_meta)
+ (enabled_if
+  (= %{read:../have_libfst} true))
  (libraries fst fst_fixture)
  (deps %{project_root}/test/reference/corpus)
  (action

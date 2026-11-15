@@ -7,6 +7,8 @@
 
 (test
  (name test_fixture)
+ (enabled_if
+  (= %{read:../have_libfst} true))
  (modules test_fixture)
  (libraries fst fst_fixture time_range vcd_events)
  (deps ../reference/fst_ref_a2.exe)

@@ -8,7 +8,7 @@ BENCH = _build/default/bench/bench.exe
 BENCH_CYCLES ?= 50000
 MIXED_CYCLES ?= 200000
 
-.PHONY: deps build test fmt fmt-check verilator-test corpus-digests ci clean bench bench-trace
+.PHONY: deps build test fmt fmt-check verilator-test corpus-digests ci release-test clean bench bench-trace
 
 deps:
 	opam install . --deps-only --with-test -y
@@ -46,6 +46,16 @@ verilator-test:
 	rm -rf $(VERILATOR_DIR)
 
 ci: fmt-check build test
+
+# A source tarball has no vendor/libfst submodule: builds a `git archive HEAD` in a temporary
+# directory and runs @all @runtest there. The tests against the C reference (test/reference,
+# test/corpus, test/meta, test_fixture) are skipped; test_unit, test_io, test_defects and
+# test_cli run.
+release-test:
+	d=$$(mktemp -d /tmp/fst-release.XXXXXX) && git archive HEAD | tar -x -C "$$d" && \
+	  $(DUNE) build --root "$$d" @all @runtest; rc=$$?; \
+	  test $$rc -ne 0 || test ! -e "$$d/_build/default/test/reference/fst_ref_a2.exe" || rc=1; \
+	  rm -rf "$$d"; exit $$rc
 
 # Large Verilator traces (about 100 MB and 40 MB) for the benchmarks; needs Verilator.
 bench-trace:

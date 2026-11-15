@@ -57,12 +57,14 @@ leg inside the same image (OCaml 4.14 and 5.4 on amd64 and arm64, 4.14 on i386 a
 | `make ci` | Formatting check, build, tests |
 | `make test` | Unit tests, corpus conversions, robustness |
 | `make verilator-test` | Convert a real Verilator `--trace-fst` trace and compare with libfst |
+| `make release-test` | Build and test a `git archive HEAD` (no libfst submodule) in a temporary directory |
 | `make corpus-digests` | Accept new digests after a deliberate corpus change |
 
 The tests convert a corpus that [`test/reference/fst_ref.c`](test/reference/fst_ref.c) writes at
 build time with the pinned [libfst](https://github.com/gtkwave/libfst) (`vendor/libfst`, so run
 `git submodule update --init`), and compare each result with the VCD libfst's own reader makes
-of the same file.
+of the same file. Without the submodule (a source tarball) those tests, and the C compiler and
+zlib they need, are skipped; the unit, I/O, defect and CLI tests still run.
 
 ## License
 

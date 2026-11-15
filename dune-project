@@ -25,4 +25,6 @@
    (>= 4.14))
   (zipc
    (>= 0.2.0))
-  unlz4))
+  unlz4
+  (conf-zlib :with-test)
+  (conf-gcc :with-test)))
