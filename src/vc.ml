@@ -50,16 +50,24 @@ let bit_delta vli =
 (* A chain table that is inconsistent with its block; [block] turns it into [Malformed]. *)
 exception Bad_chain
 
-let varint_at b pos lim what off =
-  let rec go acc shift p =
-    if p >= lim then Error.fail Truncated off "%s" what;
-    let c = Char.code (Bytes.unsafe_get b p) in
-    let acc = if shift < 32 then acc lor ((c land 0x7f) lsl shift) else acc in
-    if c land 0x80 <> 0 then go acc (shift + 7) (p + 1)
-    else if acc < 0 then Error.fail Limit_exceeded off "%s: varint" what
-    else (acc land mask32, p + 1 - pos)
-  in
-  go 0 0 pos
+(* Entry [b] is the eight characters '0'/'1' of byte [b], most significant bit first. *)
+let expand_tbl =
+  String.init 2048 (fun i -> Char.chr (((i lsr 3) lsr (7 - (i land 7))) land 1 lor 0x30))
+
+external get64u : string -> int -> int64 = "%caml_string_get64u"
+external set64u : bytes -> int -> int64 -> unit = "%caml_bytes_set64u"
+
+(* The [l] bits starting at byte [spos] of [src], as '0'/'1' characters at [dpos] of [dst]. *)
+let expand_into dst dpos src spos l =
+  let full = l lsr 3 in
+  for j = 0 to full - 1 do
+    let byte = Char.code (Bytes.unsafe_get src (spos + j)) in
+    set64u dst (dpos + (j * 8)) (get64u expand_tbl (byte * 8))
+  done;
+  for j = full * 8 to l - 1 do
+    let byte = Char.code (Bytes.unsafe_get src (spos + (j lsr 3))) in
+    Bytes.unsafe_set dst (dpos + j) (Char.unsafe_chr ((byte lsr (7 - (j land 7))) land 1 lor 0x30))
+  done
 
 (* Over a string with a NUL past the end, as libfst's chain table buffer has. *)
 let svarint_str s pos =
@@ -172,7 +180,24 @@ type state = {
   remaining : int array;
   mutable trav : bytes;
   mutable scratch : bytes;
+  max_bits : int;
+      (** With [packed]: the widest vector accepted, as {!scratch} limits the others. *)
+  mutable skip : int;  (** The length of the varint [varint_at] read last. *)
 }
+
+(* Neither a closure nor a pair per call: the length goes to [st.skip]. *)
+let rec varint_go st b pos p lim acc shift what off =
+  if p >= lim then Error.fail Truncated off "%s" what;
+  let c = Char.code (Bytes.unsafe_get b p) in
+  let acc = if shift < 32 then acc lor ((c land 0x7f) lsl shift) else acc in
+  if c land 0x80 <> 0 then varint_go st b pos (p + 1) lim acc (shift + 7) what off
+  else if acc < 0 then Error.fail Limit_exceeded off "%s: varint" what
+  else begin
+    st.skip <- p + 1 - pos;
+    acc land mask32
+  end
+
+let varint_at st b pos lim what off = varint_go st b pos pos lim 0 0 what off
 
 (* The traversal buffer grows on demand up to the block's declared need, so a corrupt
    declaration costs nothing until data actually arrives. *)
@@ -331,7 +356,7 @@ let block ~(file : File.t) ~signals ~mask ~packed ~recovered ~sink st ~index ~fi
         st.headptr.(i) <- !toffs;
         st.remaining.(i) <- dest;
         toffs := !toffs + dest;
-        let vli, _ = varint_at st.trav st.headptr.(i) (Bytes.length st.trav) w offset in
+        let vli = varint_at st st.trav st.headptr.(i) (Bytes.length st.trav) w offset in
         let tdelta = if signals.lens.(i) = 1 then bit_delta vli else vli lsr 1 in
         if tdelta >= tc_items then Error.fail Malformed offset "%s: time index %d" w tdelta;
         st.scatter.(i) <- tc_head.(tdelta);
@@ -341,7 +366,8 @@ let block ~(file : File.t) ~signals ~mask ~packed ~recovered ~sink st ~index ~fi
   done;
   let trav = st.trav in
   let tlim = !toffs in
-  let off = at vc_start in
+  (* Boxed once: an unboxed Int64 would be allocated again at every call that takes it. *)
+  let off = Sys.opaque_identity (at vc_start) in
   let w = "value changes" in
   for i = 0 to nitems - 1 do
     let t = time_table.(i) in
@@ -352,23 +378,25 @@ let block ~(file : File.t) ~signals ~mask ~packed ~recovered ~sink st ~index ~fi
     while tc_head.(i) <> 0 do
       let idx = tc_head.(i) - 1 in
       let hp = st.headptr.(idx) in
-      let vli, skip = varint_at trav hp tlim w off in
+      let vli = varint_at st trav hp tlim w off in
+      let skip = st.skip in
       let l = signals.lens.(idx) in
-      let consumed, shift1 =
+      let consumed =
         if l = 1 then begin
           let c =
             if vli land 1 = 0 then Char.unsafe_chr ((vli lsr 1) land 1 lor 0x30)
             else rcv.[(vli lsr 1) land 7]
           in
           sink.bit (idx + 1) c;
-          (skip, true)
+          skip
         end
         else if l = 0 then begin
-          let vlen, skip2 = varint_at trav (hp + skip) tlim w off in
+          let vlen = varint_at st trav (hp + skip) tlim w off in
+          let skip2 = st.skip in
           let d = hp + skip + skip2 in
           if vlen > tlim - d then Error.fail Truncated off "%s: handle %d" w (idx + 1);
           if vli land 1 = 0 then sink.varlen (idx + 1) trav d vlen;
-          (skip + skip2 + vlen, false)
+          skip + skip2 + vlen
         end
         else begin
           let d = hp + skip in
@@ -377,21 +405,20 @@ let block ~(file : File.t) ~signals ~mask ~packed ~recovered ~sink st ~index ~fi
               let n = ((l - 1) / 8) + 1 in
               if n > tlim - d then Error.fail Truncated off "%s: handle %d" w (idx + 1);
               (match packed with
-              | Some f -> f (idx + 1) trav d l
+              | Some f ->
+                  if l > st.max_bits then
+                    Error.fail Limit_exceeded off "value changes: %d bits do not fit a string" l;
+                  f (idx + 1) trav d l
               | None ->
                   let sb = scratch st ~off l in
-                  for j = 0 to l - 1 do
-                    let byte = Char.code (Bytes.unsafe_get trav (d + (j lsr 3))) in
-                    Bytes.unsafe_set sb j
-                      (Char.unsafe_chr ((byte lsr (7 - (j land 7))) land 1 lor 0x30))
-                  done;
+                  expand_into sb 0 trav d l;
                   sink.vector (idx + 1) sb 0 l);
-              (skip + n, false)
+              skip + n
             end
             else begin
               if l > tlim - d then Error.fail Truncated off "%s: handle %d" w (idx + 1);
               sink.vector (idx + 1) trav d l;
-              (skip + l, false)
+              skip + l
             end
           else if vli land 1 = 0 then begin
             if d + 1 > tlim then Error.fail Truncated off "%s: handle %d" w (idx + 1);
@@ -400,12 +427,12 @@ let block ~(file : File.t) ~signals ~mask ~packed ~recovered ~sink st ~index ~fi
               String.init 8 (fun j -> Char.unsafe_chr ((byte lsr (7 - j)) land 1 lor 0x30))
             in
             sink.real (idx + 1) (Header.float_at ~little_endian buf 0);
-            (skip + 1, false)
+            skip + 1
           end
           else begin
             if d + 8 > tlim then Error.fail Truncated off "%s: handle %d" w (idx + 1);
             sink.real (idx + 1) (Header.float_at_bytes ~little_endian trav d);
-            (skip + l, false)
+            skip + l
           end
         end
       in
@@ -414,8 +441,8 @@ let block ~(file : File.t) ~signals ~mask ~packed ~recovered ~sink st ~index ~fi
       tc_head.(i) <- st.scatter.(idx);
       st.scatter.(idx) <- 0;
       if st.remaining.(idx) > 0 then begin
-        let vli, _ = varint_at trav st.headptr.(idx) tlim w off in
-        let tdelta = if shift1 then bit_delta vli else vli lsr 1 in
+        let vli = varint_at st trav st.headptr.(idx) tlim w off in
+        let tdelta = if l = 1 then bit_delta vli else vli lsr 1 in
         if tdelta + i >= tc_items then Error.fail Malformed off "%s: time index %d" w (tdelta + i);
         st.scatter.(idx) <- tc_head.(i + tdelta);
         tc_head.(i + tdelta) <- idx + 1
@@ -443,7 +470,8 @@ type reader = {
 }
 
 (* Reads the blocks from index [from] up to, not including, [stop]. *)
-let start ?select ?packed ?(from = 0) ?first ?stop ~(file : File.t) ~signals ~sink () =
+let start ?select ?packed ?(max_bits = max_int) ?(from = 0) ?first ?stop ~(file : File.t) ~signals
+    ~sink () =
   let maxhandle = Array.length signals.lens in
   let st =
     {
@@ -455,6 +483,8 @@ let start ?select ?packed ?(from = 0) ?first ?stop ~(file : File.t) ~signals ~si
       remaining = Array.make maxhandle 0;
       trav = Bytes.empty;
       scratch = Bytes.create 64;
+      max_bits;
+      skip = 0;
     }
   in
   {
@@ -596,8 +626,8 @@ let start_at ?select ?packed ~file ~signals ~sink ~block () =
   end;
   r
 
-let iter ?select ?packed ~file ~signals ~sink () =
-  let r = start ?select ?packed ~file ~signals ~sink () in
+let iter ?select ?packed ?max_bits ~file ~signals ~sink () =
+  let r = start ?select ?packed ?max_bits ~file ~signals ~sink () in
   while step r do
     ()
   done

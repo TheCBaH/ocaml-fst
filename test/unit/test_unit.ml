@@ -88,6 +88,9 @@ let () =
       ("\x7f\xff\x00", "\\177\\377\\000");
       ("~!", "~!");
     ];
+  (let long = String.init 10_000 (fun i -> Char.chr (i * 7 land 255)) in
+   let each = String.concat "" (List.init 10_000 (fun i -> P.escape (String.make 1 long.[i]))) in
+   check "escape across chunks" qstr each (P.escape long));
   let chain name s alias2 expected =
     check name (opt pair) expected (P.parse_chain s ~alias2 ~vc_maxhandle:4 ~vc_len:10)
   in
