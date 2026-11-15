@@ -503,6 +503,30 @@ let mutate_fixtures () =
       done)
     [ ("base", base_spec); ("alias", alias_spec) ]
 
+(* Values whose sums with a position wrap around: a variable as wide as an int allows (a width
+   is read as 32 bits, so this only reaches 31-bit ints), and chain lengths whose difference is
+   [max_int] in a dynamic alias 2 chain table, whatever the int size. *)
+let wrapping () =
+  let outcome name spec =
+    let got = exercise name (F.build spec) in
+    if got = "Ok" then fail name "expected an error, got Ok"
+  in
+  List.iter
+    (fun signal ->
+      outcome
+        (Printf.sprintf "max_int wide signal %d" signal)
+        (F.set_declared_length base_spec ~signal max_int))
+    [ 2; 3 ];
+  let alias2 =
+    {
+      base_spec with
+      blocks = List.mapi (fun i b -> if i = 0 then { b with F.typ = 8 } else b) base_spec.blocks;
+    }
+  in
+  let table = "\003" ^ String.make 9 '\255' ^ "\000" in
+  outcome "chain length max_int"
+    (F.set_chain_table (F.set_chain_dest alias2 ~block:0 ~handle:1 4) ~block:0 table)
+
 let () =
   Printexc.record_backtrace true;
   let corpus = Sys.argv.(1) and malformed = Sys.argv.(2) in
@@ -512,6 +536,7 @@ let () =
   pin_malformed malformed;
   let before = !cases in
   mutate_fixtures ();
+  wrapping ();
   let t2 = Sys.time () in
   Printf.printf
     "robust: %d cases (%d fixture mutations, %d not representable), %d calls, %d failed\n" !cases
