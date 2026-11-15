@@ -90,23 +90,6 @@ let g16 d =
   else if d = Float.neg_infinity then "-inf"
   else Printf.sprintf "%.16g" d
 
-module Growable = struct
-  type 'a t = { mutable a : 'a array; mutable n : int; default : 'a }
-
-  let create default = { a = Array.make 1024 default; n = 0; default }
-
-  let push t v =
-    if t.n = Array.length t.a then begin
-      let a = Array.make (2 * t.n) t.default in
-      Array.blit t.a 0 a 0 t.n;
-      t.a <- a
-    end;
-    t.a.(t.n) <- v;
-    t.n <- t.n + 1
-
-  let to_array t = Array.sub t.a 0 t.n
-end
-
 (* The [$var] size: reals by precision, ports by their 3n+2 encoding. *)
 let var_length ~var_type ~length =
   let len =
@@ -120,9 +103,7 @@ let definitions ~extensions (file : File.t) b =
   Printf.bprintf b "$version\n\t%s\n$end\n" h.version;
   if not (Int64.equal h.timezero 0L) then Printf.bprintf b "$timezero\n\t%Ld\n$end\n" h.timezero;
   Printf.bprintf b "$timescale\n\t%s\n$end\n" (timescale h.timescale);
-  let lens = Growable.create 0
-  and reals = Growable.create false
-  and ports = Growable.create false in
+  let signals = File.signals_exn file in
   let data = File.hierarchy_data file in
   let base = match file.hier with Some blk -> blk.pos | None -> -1L in
   Hier.fold ~base data ~init:() ~f:(fun () e ->
@@ -147,21 +128,16 @@ let definitions ~extensions (file : File.t) b =
                 arg
             else Printf.bprintf b "$attrbegin misc %02x %s %Ld $end\n" subtype name arg
       | Attr_end -> if extensions then Buffer.add_string b "$attrend $end\n"
-      | Var { var_type; name; length; handle; alias; _ } ->
-          let real = Hier.is_real var_type in
-          if not alias then begin
-            Hier.check_real ~base ~var_type ~length;
-            Growable.push lens length;
-            Growable.push reals real;
-            Growable.push ports (var_type = Hier.vt_port)
-          end;
+      | Var { var_type; name; length; handle; _ } ->
           Printf.bprintf b "$var %s %d %s %s $end\n" Hier.var_type_names.(var_type)
             (var_length ~var_type ~length) (id handle) name);
   Buffer.add_string b "$enddefinitions $end\n";
-  ({ Vc.lens = Growable.to_array lens; reals = Growable.to_array reals }, Growable.to_array ports)
+  signals
 
 let write ~extensions file b ~flush =
-  let signals, ports = definitions ~extensions file b in
+  let signals = definitions ~extensions file b in
+  let ports = Array.map (fun (k, _) -> k = Hier.Port) signals in
+  let signals = Vc.tables signals in
   let ids = Array.init (Array.length signals.lens) (fun i -> id (i + 1)) in
   let dumpvars = ref 0 in
   let blackouts = file.blackouts and cur = ref 0 in

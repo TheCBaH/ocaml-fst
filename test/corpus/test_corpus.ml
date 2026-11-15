@@ -101,10 +101,39 @@ let masks n =
   if n <= 64 then List.init n (fun i -> (Printf.sprintf "only %d" (i + 1), fun h -> h = i + 1))
   else []
 
+let handles t = match Fst.signals t with Ok a -> Array.length a | Error _ -> 0
+
+(* [signals] agrees with the hierarchy's variables that are not aliases. *)
+let check_signals t =
+  match Fst.signals t with
+  | Error _ -> Ok ()
+  | Ok a -> (
+      let kind (var_type, length) =
+        if Fst.Hier.is_real var_type then Fst.Real
+        else if length = 0 then Fst.String
+        else if var_type = 18 then Fst.Port
+        else if length = 1 then Fst.Bit
+        else Fst.Vector
+      in
+      let vars =
+        Fst.fold_hierarchy t ~init:[] ~f:(fun acc -> function
+          | Fst.Hier.Var { var_type; length; alias = false; _ } -> (var_type, length) :: acc
+          | _ -> acc)
+      in
+      match vars with
+      | Error e -> Error (Fst.Error.to_string e)
+      | Ok vars ->
+          let expected = Array.of_list (List.rev_map (fun v -> (kind v, snd v)) vars) in
+          if a <> expected then Error "signals differ from the hierarchy"
+          else if Array.length a <> Int64.to_int (Fst.header t).max_handle then
+            Error "not the header's handle count"
+          else if Fst.signals t != Fst.signals t then Error "signals are not cached"
+          else Ok ())
+
 (* With [select], the calls are those without it minus the unselected handles' ones; stepping
    makes the same calls, and the first step, not [reader], calls [select] once per handle. *)
 let check_select t ~full (name, select) =
-  let n = Int64.to_int (Fst.header t).max_handle in
+  let n = handles t in
   let expected = (fst full, List.filter (fun (h, _) -> h = 0 || select h) (snd full)) in
   let asked = Hashtbl.create 64 in
   let counted h =
@@ -392,6 +421,11 @@ let () =
           | Error e ->
               incr failed;
               Printf.printf "FAIL %s: %s\n" f e);
+          (match check_signals t with
+          | Ok () -> ()
+          | Error e ->
+              incr failed;
+              Printf.printf "FAIL %s: signals: %s\n" f e);
           Fst.close t)
     (Common.files dir ".fst");
   if !multi_step then Hashtbl.replace seen "multi-step" ();
@@ -408,7 +442,7 @@ let () =
               | Error e ->
                   incr failed;
                   Printf.printf "FAIL %s: %s\n" f e)
-            (masks (Int64.to_int (Fst.header t).max_handle));
+            (masks (handles t));
           Fst.close t)
     (Common.files dir ".fst");
   List.iter
@@ -424,7 +458,7 @@ let () =
               | Error e ->
                   incr failed;
                   Printf.printf "FAIL %s: %s\n" f e)
-            (masks (Int64.to_int (Fst.header t).max_handle));
+            (masks (handles t));
           Fst.close t)
     (Common.files dir ".fst");
   List.iter
@@ -447,7 +481,7 @@ let () =
               | Error e ->
                   incr failed;
                   Printf.printf "FAIL %s: %s\n" f e)
-            (masks (Int64.to_int (Fst.header t).max_handle));
+            (masks (handles t));
           Fst.close t)
     (Common.files dir ".fst");
   let required =

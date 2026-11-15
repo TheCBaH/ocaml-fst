@@ -14,7 +14,10 @@ let check name ok =
 let spec =
   F.make
     [ F.signal "a" F.Bit; F.signal "v" (F.Vector 8) ]
-    [ F.block ~times:[ 10L; 20L ] [ (0, 1, F.B '1'); (1, 2, F.V "10100101") ] ]
+    [
+      F.block ~times:[ 10L; 20L ] [ (0, 1, F.B '1'); (1, 2, F.V "10100101") ];
+      F.block ~times:[ 20L; 30L ] [ (0, 1, F.B '0') ];
+    ]
 
 let data = F.build spec
 
@@ -32,6 +35,12 @@ let is_io name = function
   | Error e -> check (name ^ ": " ^ Fst.Error.to_string e) (Fst.Error.kind e = Fst.Error.Io)
   | Ok _ -> check (name ^ ": expected an I/O error") false
 
+let drain r =
+  let rec go () =
+    match Fst.step r with Ok true -> go () | Ok false -> Ok () | Error e -> Error e
+  in
+  go ()
+
 (* Every entry point that reads the source, each as an [Error Io] and not an exception. *)
 let all_fail name t =
   let guard what f =
@@ -42,9 +51,9 @@ let all_fail name t =
   guard "blocks" (fun () -> Result.map ignore (Fst.blocks t));
   guard "fold_hierarchy" (fun () -> Fst.fold_hierarchy t ~init:() ~f:(fun () _ -> ()));
   guard "iter_changes" (fun () -> Fst.iter_changes t sink);
-  guard "reader" (fun () -> Result.map ignore (Fst.reader t sink));
-  guard "reader_at" (fun () -> Result.map ignore (Fst.reader_at t sink ~block:0));
-  guard "aligned_block" (fun () -> Result.map ignore (Fst.aligned_block t 0));
+  guard "reader" (fun () -> Result.bind (Fst.reader t sink) drain);
+  guard "reader_at" (fun () -> Result.bind (Fst.reader_at t sink ~block:1) drain);
+  guard "aligned_block" (fun () -> Result.map ignore (Fst.aligned_block t 1));
   guard "Vcd.to_string" (fun () -> Result.map ignore (Fst.Vcd.to_string t))
 
 let reader ~fail s =

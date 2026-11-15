@@ -80,24 +80,18 @@ type sink = Vc.sink = {
   varlen : int -> bytes -> int -> int -> unit;
 }
 
-let signals t =
-  let lens = ref [] and reals = ref [] in
-  let base = match t.File.hier with Some b -> b.pos | None -> -1L in
-  H.fold ~base (File.hierarchy_data t) ~init:() ~f:(fun () -> function
-    | H.Var { var_type; length; alias = false; _ } ->
-        H.check_real ~base ~var_type ~length;
-        lens := length :: !lens;
-        reals := H.is_real var_type :: !reals
-    | _ -> ());
-  { Vc.lens = Array.of_list (List.rev !lens); reals = Array.of_list (List.rev !reals) }
+type kind = H.kind = Bit | Vector | Port | Real | String
+
+let signals (t : t) = File.signals t
+let tables t = Vc.tables (File.signals_exn t)
 
 let iter_changes ?select ?packed t sink =
-  Err.catch (fun () -> Vc.iter ?select ?packed ~file:t ~signals:(signals t) ~sink ())
+  Err.catch (fun () -> Vc.iter ?select ?packed ~file:t ~signals:(tables t) ~sink ())
 
 type reader = Vc.reader
 
 let reader ?select ?packed t sink =
-  Err.catch (fun () -> Vc.start ?select ?packed ~file:t ~signals:(signals t) ~sink ())
+  Err.catch (fun () -> Vc.start ?select ?packed ~file:t ~signals:(tables t) ~sink ())
 
 let step r = Err.catch (fun () -> Vc.step r)
 
@@ -119,7 +113,7 @@ let check_block (t : t) k =
 let reader_at ?select ?packed t sink ~block =
   Err.catch (fun () ->
       check_block t block;
-      Vc.start_at ?select ?packed ~file:t ~signals:(signals t) ~sink ~block ())
+      Vc.start_at ?select ?packed ~file:t ~signals:(tables t) ~sink ~block ())
 
 let aligned_block (t : t) k =
   Err.catch (fun () ->
@@ -134,7 +128,7 @@ let aligned_block (t : t) k =
             ends.(j) <- Some e;
             e
       in
-      let signals = signals t in
+      let signals = tables t in
       let activity = Array.make (Array.length bs) None in
       let activity_of j =
         match activity.(j) with

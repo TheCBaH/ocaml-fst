@@ -23,6 +23,16 @@ let vt_string = 21
 let vt_shortreal = 29
 let is_real t = t = vt_real || t = vt_real_parameter || t = vt_realtime || t = vt_shortreal
 
+type kind = Bit | Vector | Port | Real | String
+
+(* What the traversal delivers for a variable, which its declared length decides. *)
+let kind_of ~var_type ~length =
+  if is_real var_type then Real
+  else if length = 0 then String
+  else if var_type = vt_port then Port
+  else if length = 1 then Bit
+  else Vector
+
 (* The traversal reads 8 bytes per real value. *)
 let check_real ~base ~var_type ~length =
   if is_real var_type && length <> 8 then
@@ -99,3 +109,33 @@ let fold ~base data ~init ~f =
     end
   done;
   !acc
+
+(* The kind and declared length of each variable that is not an alias, in handle order, without
+   building any name. *)
+let signals ~base data =
+  let r = Bin_reader.create ~base data in
+  let acc = ref [] in
+  let what = "hierarchy" in
+  while Bin_reader.remaining r > 0 do
+    let tag = Bin_reader.u8 r what in
+    if tag = tag_scope then begin
+      Bin_reader.skip r 1 what;
+      Bin_reader.skip_cstring r what;
+      Bin_reader.skip_cstring r what
+    end
+    else if tag = tag_attr_begin then begin
+      Bin_reader.skip r 2 what;
+      Bin_reader.skip_cstring r what;
+      ignore (Bin_reader.varint r what)
+    end
+    else if tag < Array.length var_type_names then begin
+      Bin_reader.skip r 1 what;
+      Bin_reader.skip_cstring r what;
+      let length = Bin_reader.varint32_int r what in
+      if Bin_reader.varint32_int r what = 0 then begin
+        check_real ~base ~var_type:tag ~length;
+        acc := (kind_of ~var_type:tag ~length, length) :: !acc
+      end
+    end
+  done;
+  Array.of_list (List.rev !acc)

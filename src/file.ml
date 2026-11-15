@@ -32,6 +32,7 @@ type t = {
   geometry : block option;
   hier : block option;
   blackouts : (int64 * bool) array;
+  mutable signals : ((Hier.kind * int) array, Error.t) result option;
 }
 
 let of_string s =
@@ -153,6 +154,7 @@ let index src =
         geometry = !geometry;
         hier;
         blackouts = !blackouts;
+        signals = None;
       }
 
 (* Closes the underlying source once, however often it is called; later reads fail. *)
@@ -232,6 +234,22 @@ let hierarchy_data t =
         let mid = Codec.lz4 ~what ~offset:off data ~off:p ~len:(16 + clen - p) ~size:uclen2 in
         Codec.lz4 ~what ~offset:off mid ~off:0 ~len:uclen2 ~size:uclen
       end
+
+(* The variables' kinds and declared lengths, the one place a real's length is checked; the
+   outcome, an error included, is kept. *)
+let signals t =
+  match t.signals with
+  | Some r -> r
+  | None ->
+      let r =
+        Error.catch (fun () ->
+            let base = match t.hier with Some b -> b.pos | None -> -1L in
+            Hier.signals ~base (hierarchy_data t))
+      in
+      t.signals <- Some r;
+      r
+
+let signals_exn t = match signals t with Ok a -> a | Error e -> raise (Error.E e)
 
 (* A value change block's waves compression: ['Z'], ['F'] or ['4']. *)
 let packtype t b =

@@ -9,6 +9,7 @@ type signal = {
   kind : kind;
   alias : int option;  (** The 1-based handle this one aliases; [kind] is then only the type. *)
   decl_len : int option;  (** Overrides the hierarchy's declared length. *)
+  var_type : int option;  (** Overrides the hierarchy's variable type. *)
 }
 
 (** [B] is one of [01xzhuwl-?]. [V] has one character per bit. *)
@@ -41,6 +42,10 @@ val build : t -> string
 val set_length : t -> signal:int -> int -> t
 (** The hierarchy's declared length of the [signal]th variable (aliases included, 1-based).
     Reals take that many bytes in the frame. *)
+
+val set_var_type : t -> signal:int -> int -> t
+(** The hierarchy's variable type of the [signal]th variable (aliases included, 1-based), e.g.
+    18 for a port. *)
 
 val set_chain_dest : t -> block:int -> handle:int -> int -> t
 (** Also sets the block's declared traversal memory to [dest], so that the chain is not skipped

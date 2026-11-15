@@ -62,9 +62,14 @@ let () =
   Fst.close t;
   List.iter
     (fun n ->
-      entry_points
-        (Printf.sprintf "real length %d" n)
-        Fst.Error.Malformed (F.set_length spec ~signal:2 n))
+      let bad = F.set_length spec ~signal:2 n in
+      entry_points (Printf.sprintf "real length %d" n) Fst.Error.Malformed bad;
+      let t = open_ bad in
+      (match (Fst.signals t, Fst.signals t) with
+      | (Error e as a), b ->
+          check "signals: the same error each time" (a == b && Fst.Error.kind e = Malformed)
+      | Ok _, _ -> check "signals: Ok" false);
+      Fst.close t)
     [ 0; 4; 7; 9; 16 ]
 
 (* D3: a chain declares a huge size, which must be refused before any buffer is allocated. *)

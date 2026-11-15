@@ -19,6 +19,9 @@ type sink = {
    whether it is a real. *)
 type signals = { lens : int array; reals : bool array }
 
+let tables (a : (Hier.kind * int) array) =
+  { lens = Array.map snd a; reals = Array.map (fun (k, _) -> k = Hier.Real) a }
+
 let rcv = "xzhuwl-?"
 
 (* libfst's uint32_t arithmetic; on 32-bit hosts [int] has 31 bits and values that large are
