@@ -215,13 +215,20 @@ val reader_at :
   (reader, Error.t) result
 (** A {!reader} that starts at the [block]th of {!blocks} (0-based). [select] and [packed] are as in {!reader}.
 
-    [block = 0] is {!reader}. For a later block, the first step first passes a frame: [frame]
+    [block = 0] is {!reader}. For a later block, the calls are those of libfst's time-limited read
+    from that block ([fstReaderSetLimitTimeRange]). The first step first passes a frame: [frame]
     with the block's start time and every selected handle's value after all changes of the
     earlier blocks and before any of this block's, including the selected string variables'
-    (found by reading only those handles' chains in the earlier blocks), then the block's
-    changes. [time] is called for the block's first time even when the previous block ended on
-    it, so a timestamp that spans the boundary is seen in two parts: use {!aligned_block} to
-    start where none does. 
+    (found by reading only those handles' chains in the earlier blocks, which libfst's frame
+    lacks). Then come the block's changes, as a sequential read makes them. [time] is called for
+    the block's first time even when the previous block ended on it, so a timestamp that spans
+    the boundary is seen in two parts: use {!aligned_block} to start where none does.
+
+    One exception: libfst's parser leaves a chain length negative for a forward alias (one that
+    names a later handle, which only a hand-built file has), and a sequential read carries it
+    into a later block that lists the handle as unchanged. A seek does not carry it into the
+    [block]th, as libfst's time-limited read does not, so that block's changes for such a handle
+    are missing.
 
     @raise Invalid_argument if there is no such block: a bad argument is a caller error, not bad input. *)
 

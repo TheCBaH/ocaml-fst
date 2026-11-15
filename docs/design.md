@@ -77,9 +77,20 @@ that selects only the string handles and keeps the last value of each. The cost 
 handles' chains in it. `aligned_block` reads time tables only, and decodes a block when its first
 time equals the previous block's last.
 
-Two gaps remain, and are what the seeking phase changes: the prepass's chain-table lengths are
-discarded, while a sequential read carries them across blocks, so a block that depends on them (a
-stale dynamic alias) could differ after a seek; and nothing is remembered between seeks.
+What `reader_at k` guarantees is what libfst's time-limited read (`fstReaderSetLimitTimeRange`)
+makes from block `k`: a `frame` call, a `time` call for the block's first time even if the
+previous block ended on it, then the block's changes as a sequential read makes them. The
+string variables, which libfst's frame lacks, are the addition: the prepass recovers them. This is
+decision D2 (fallback B): `test/oracle` compares the calls with libfst's for every `k` whose
+start time skips exactly the blocks before it.
+
+There is one documented exception to `reader_at k` making the calls of the sequential suffix. A
+chain table can hold a forward alias, one that names a later handle; libfst's writer never makes
+one, so only a hand-built file does. Its negative length stays in a sequential reader's table and
+a later block that lists the handle as unchanged resolves it. A seek does not carry that length
+into block `k` (libfst's time-limited read does not either), so the handle's changes in `k` are
+missing. `test/fixture/test_fixture.ml` asserts this, against libfst, as an exception, not as a
+defect to fix.
 
 ## Select and packed
 

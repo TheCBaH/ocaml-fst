@@ -216,10 +216,9 @@ let suffix_and_seek t k =
   let seek = steps (ok "reader_at" (Fst.reader_at t (tagged c) ~block:k)) c in
   (suffix, after_frame (List.concat seek))
 
-(* Known divergence (S3): [reader_at] does not replay earlier blocks' chain tables, so it misses
-   handle 5's changes in block 1. S3 sets this to false, which asserts equality. *)
-let known_divergence = true
-
+(* The documented exception to [reader_at k] being the sequential suffix: a forward alias's
+   negative chain length is not carried across a seek, so the stale alias of handle 5 is not
+   replayed. [reader_at k] is libfst's time-limited read, which shares this. *)
 let () =
   let exe = Sys.argv.(1) in
   let s = F.build stale in
@@ -229,22 +228,11 @@ let () =
   check "stale: block 1 sequentially gives handle 5 handle 4's changes"
     (suffix = [ (0, "#30"); (5, "5=1"); (4, "4=1"); (1, "1=0"); (0, "#40"); (4, "4=z"); (5, "5=z") ]);
   check
-    (Printf.sprintf "stale: reader_at 1 = sequential suffix%s (suffix: %s; reader_at 1: %s)"
-       (if known_divergence then " is a known divergence (S3)" else "")
+    (Printf.sprintf
+       "exception: reader_at 1 lacks the sequential suffix's stale-alias changes (suffix: %s; \
+        reader_at 1: %s)"
        (show suffix) (show seek))
-    (suffix = seek <> known_divergence);
-  match reference exe s with
-  | Some expected ->
-      check "libfst agrees with the stale fixture" (expected = ok "vcd" (Fst.Vcd.to_string t))
-  | None -> check "libfst rejected the stale fixture" false
-
-(* libfst's time-limited read starts from empty chain tables too, so it shares reader_at's
-   divergence: its changes from block 1 on lack handle 5's. S3 makes reader_at agree with the
-   sequential read, and libfst's time-limited read then differs from it. *)
-let () =
-  let exe = Sys.argv.(1) in
-  let s = F.build stale in
-  let t = read s in
+    (seek = List.filter (fun (h, _) -> h <> 5) suffix);
   let path = Filename.temp_file "stale" ".fst" in
   Out_channel.with_open_bin path (fun oc -> output_string oc s);
   let records what = function
@@ -259,16 +247,16 @@ let () =
   | None -> check "stale: no time range start reaches block 1" false
   | Some start ->
       let limited = records "libfst, limited" (Time_range.libfst exe ~start path) in
-      let seek = records "reader_at" (Time_range.reader_at t ~block:1) in
+      let at = records "reader_at" (Time_range.reader_at t ~block:1) in
       check "stale: libfst's sequential read has handle 5 in block 1"
         (List.mem "30 5 v:1" sequential);
       check "stale: libfst's time-limited read has only handle 5's frame value"
         (List.filter (fun r -> List.nth (String.split_on_char ' ' r) 1 = "5") limited
         = [ "30 5 v:x" ]);
-      check
-        (if known_divergence then
-           "stale: libfst's time-limited read = reader_at 1 (shared divergence)"
-         else "stale: libfst's time-limited read differs from reader_at 1 (its exception)")
-        (limited = seek = known_divergence));
+      check "exception: reader_at 1 = libfst's time-limited read" (limited = at));
   Sys.remove path;
+  (match reference exe s with
+  | Some expected ->
+      check "libfst agrees with the stale fixture" (expected = ok "vcd" (Fst.Vcd.to_string t))
+  | None -> check "libfst rejected the stale fixture" false);
   if !failures > 0 then exit 1
