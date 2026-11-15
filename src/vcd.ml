@@ -97,39 +97,82 @@ let var_length ~var_type ~length =
   in
   if var_type = Hier.vt_port then (len - 2) land Vc.mask32 / 3 else len
 
+let adds b l = List.iter (Buffer.add_string b) l
+
 let definitions ~extensions (file : File.t) b =
   let h = file.header in
-  Printf.bprintf b "$date\n\t%s\n$end\n" h.date;
-  Printf.bprintf b "$version\n\t%s\n$end\n" h.version;
-  if not (Int64.equal h.timezero 0L) then Printf.bprintf b "$timezero\n\t%Ld\n$end\n" h.timezero;
-  Printf.bprintf b "$timescale\n\t%s\n$end\n" (timescale h.timescale);
+  Buffer.add_string b "$date\n\t";
+  Buffer.add_string b h.date;
+  Buffer.add_string b "\n$end\n$version\n\t";
+  Buffer.add_string b h.version;
+  Buffer.add_string b "\n$end\n";
+  if not (Int64.equal h.timezero 0L) then begin
+    Buffer.add_string b "$timezero\n\t";
+    Buffer.add_string b (Int64.to_string h.timezero);
+    Buffer.add_string b "\n$end\n"
+  end;
+  Buffer.add_string b "$timescale\n\t";
+  Buffer.add_string b (timescale h.timescale);
+  Buffer.add_string b "\n$end\n";
   let signals = File.signals_exn file in
   let data = File.hierarchy_data file in
   Hier.fold ~handles:(Array.length signals) data ~init:() ~f:(fun () e ->
       match e with
       | Hier.Scope { scope_type; name; _ } ->
           let st = if scope_type >= Array.length Hier.scope_type_names then 0 else scope_type in
-          Printf.bprintf b "$scope %s %s $end\n" Hier.scope_type_names.(st) name
+          Buffer.add_string b "$scope ";
+          Buffer.add_string b Hier.scope_type_names.(st);
+          Buffer.add_char b ' ';
+          Buffer.add_string b name;
+          Buffer.add_string b " $end\n"
       | Upscope -> Buffer.add_string b "$upscope $end\n"
       | Attr_begin { attr_type; subtype; name; arg } ->
           let name = if name = "" then "\"\"" else name in
           if extensions then
             let line kind names =
               let sub = if subtype >= Array.length names then 0 else subtype in
-              Printf.bprintf b "$attrbegin %s %s %s %Ld $end\n" kind names.(sub) name arg
+              adds b
+                [
+                  "$attrbegin ";
+                  kind;
+                  " ";
+                  names.(sub);
+                  " ";
+                  name;
+                  " ";
+                  Int64.to_string arg;
+                  " $end\n";
+                ]
             in
             if attr_type = 1 then line attr_type_names.(1) array_type_names
             else if attr_type = 2 then line attr_type_names.(2) enum_value_type_names
             else if attr_type = 3 then line attr_type_names.(3) pack_type_names
-            else if subtype = 0 then Printf.bprintf b "$comment\n\t%s\n$end\n" name
-            else if subtype = 4 || subtype = 5 then
-              Printf.bprintf b "$attrbegin misc %02x %Ld %Ld $end\n" subtype (varint_of_name name)
-                arg
-            else Printf.bprintf b "$attrbegin misc %02x %s %Ld $end\n" subtype name arg
+            else if subtype = 0 then adds b [ "$comment\n\t"; name; "\n$end\n" ]
+            else
+              let name =
+                if subtype = 4 || subtype = 5 then Int64.to_string (varint_of_name name) else name
+              in
+              adds b
+                [
+                  "$attrbegin misc ";
+                  Printf.sprintf "%02x" subtype;
+                  " ";
+                  name;
+                  " ";
+                  Int64.to_string arg;
+                  " $end\n";
+                ]
       | Attr_end -> if extensions then Buffer.add_string b "$attrend $end\n"
       | Var { var_type; name; length; handle; _ } ->
-          Printf.bprintf b "$var %s %d %s %s $end\n" Hier.var_type_names.(var_type)
-            (var_length ~var_type ~length) (id handle) name);
+          Buffer.add_string b "$var ";
+          Buffer.add_string b Hier.var_type_names.(var_type);
+          Buffer.add_char b ' ';
+          Buffer.add_string b (string_of_int (var_length ~var_type ~length));
+          Buffer.add_char b ' ';
+          Buffer.add_string b (id handle);
+          Buffer.add_char b ' ';
+          Buffer.add_string b name;
+          Buffer.add_string b " $end\n");
   Buffer.add_string b "$enddefinitions $end\n";
   signals
 
