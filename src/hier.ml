@@ -34,9 +34,9 @@ let kind_of ~var_type ~length =
   else Vector
 
 (* The traversal reads 8 bytes per real value. *)
-let check_real ~base ~var_type ~length =
+let check_real ~at ~var_type ~length =
   if is_real var_type && length <> 8 then
-    Error.fail Malformed base "real variable of %d bytes" length
+    Error.fail ~hier:true Malformed (Int64.of_int at) "real variable of %d bytes" length
 
 (* libfst's longest kept name (FST_ID_NAM_ATTR_SIZ). *)
 let max_name = 65536 + 4096
@@ -62,13 +62,14 @@ let tag_upscope = 255
 
 (* The tag stream as libfst's fstReaderProcessHier reads it: unknown tags are skipped, empty
    scope names become [$unnamed_scope_N], aliases name a 1-based handle and other variables take
-   the next one. *)
-let fold ~base data ~init ~f =
-  let r = Bin_reader.create ~base data in
+   the next one. An alias to a handle past [handles] is [Malformed]. *)
+let fold ~handles data ~init ~f =
+  let r = Bin_reader.create ~hier:true data in
   let unnamed = ref 0 and handle = ref 0 in
   let acc = ref init in
   let what = "hierarchy" in
   while Bin_reader.remaining r > 0 do
+    let at = r.pos in
     let tag = Bin_reader.u8 r what in
     if tag = tag_scope then begin
       let scope_type = Bin_reader.u8 r what in
@@ -98,6 +99,8 @@ let fold ~base data ~init ~f =
       let name = Bin_reader.cstring r ~max:max_name what in
       let length = Bin_reader.varint32_int r what in
       let alias = Bin_reader.varint32_int r what in
+      if alias > handles then
+        Bin_reader.fail_at r at Malformed "alias of handle %d: the file has %d" alias handles;
       let handle, alias =
         if alias = 0 then begin
           incr handle;
@@ -110,13 +113,13 @@ let fold ~base data ~init ~f =
   done;
   !acc
 
-(* The kind and declared length of each variable that is not an alias, in handle order, without
-   building any name. *)
-let signals ~base data =
-  let r = Bin_reader.create ~base data in
-  let acc = ref [] in
+(* Calls [f ~at ~var_type ~length] for each variable that is not an alias, in handle order,
+   without building any name. *)
+let iter_handles data ~f =
+  let r = Bin_reader.create ~hier:true data in
   let what = "hierarchy" in
   while Bin_reader.remaining r > 0 do
+    let at = r.pos in
     let tag = Bin_reader.u8 r what in
     if tag = tag_scope then begin
       Bin_reader.skip r 1 what;
@@ -132,10 +135,19 @@ let signals ~base data =
       Bin_reader.skip r 1 what;
       Bin_reader.skip_cstring r what;
       let length = Bin_reader.varint32_int r what in
-      if Bin_reader.varint32_int r what = 0 then begin
-        check_real ~base ~var_type:tag ~length;
-        acc := (kind_of ~var_type:tag ~length, length) :: !acc
-      end
+      if Bin_reader.varint32_int r what = 0 then f ~at ~var_type:tag ~length
     end
-  done;
+  done
+
+(* The kind and declared length of each variable that is not an alias, in handle order. *)
+let signals data =
+  let acc = ref [] in
+  iter_handles data ~f:(fun ~at ~var_type ~length ->
+      check_real ~at ~var_type ~length;
+      acc := (kind_of ~var_type ~length, length) :: !acc);
   Array.of_list (List.rev !acc)
+
+let count_handles data =
+  let n = ref 0 in
+  iter_handles data ~f:(fun ~at:_ ~var_type:_ ~length:_ -> incr n);
+  !n

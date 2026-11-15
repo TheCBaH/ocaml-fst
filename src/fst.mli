@@ -7,15 +7,41 @@
 
     All four compressions are decoded in OCaml: zlib and gzip with
     {{:https://erratique.ch/software/zipc}zipc}, LZ4 with
-    {{:https://github.com/TheCBaH/ocaml-unlz4}unlz4}, and FastLZ here. Malformed input yields an
-    {!Error.t}, never an exception. *)
+    {{:https://github.com/TheCBaH/ocaml-unlz4}unlz4}, and FastLZ here.
+
+    {1 Errors}
+
+    Damaged input, and a file or read that fails, yield an {!Error.t}: a damaged value change block
+    is [Malformed], never skipped, and the file is not read past it. Exceptions are for what is not
+    input: [Invalid_argument] for a bad argument ({!reader_at}, {!aligned_block}), and whatever a
+    sink raises, which propagates to the caller of {!iter_changes} or {!step}.
+
+    {1 Domains and threads}
+
+    Nothing here is thread-safe. A {!t}, the {!reader}s made from it and their sinks belong to one
+    domain or thread at a time: the handle caches {!signals} and reads its source through a
+    position the readers share. Separate handles share no state and may be used from separate
+    domains.
+
+    {1 Lifetime}
+
+    {!close} ends the use of a handle, and is harmless when repeated. Afterwards every function
+    that takes the handle, or a {!reader} made from it, returns [Error Io] ("file is closed");
+    this holds even where the answer is cached, and the sink gets no call. {!header} and
+    {!blackouts} return what was read when the file was opened, so they still work. A {!reader}
+    reads from the handle when stepped, so one that outlives {!close} fails at its next {!step},
+    and dropping one needs no cleanup. The
+    bytes passed to a sink are valid only during the call. An exception from a sink ends that
+    {!iter_changes}, or that reader's steps, but leaves the handle usable. *)
 
 (** Errors. *)
 module Error : sig
   type kind =
     | Truncated  (** The input ends inside a block or record. *)
     | Malformed  (** A block or record breaks the format. *)
-    | Unsupported  (** A feature this reader does not handle. *)
+    | Unsupported
+        (** A feature this reader does not handle: a gzip method other than deflate, or a file with
+            both a gzip and an LZ4 hierarchy block (libfst keeps the last). *)
     | Decompression  (** A compressed section does not decode to its declared size. *)
     | Limit_exceeded  (** A size does not fit the platform's [int] or strings. *)
     | Io  (** The file cannot be opened or read. *)
@@ -24,9 +50,10 @@ module Error : sig
 
   val kind : t -> kind
 
-  val offset : t -> int64 option
-  (** The file offset of the offending block or field, when known. For hierarchy records, it is
-      the offset into the decompressed hierarchy, plus the block's offset. *)
+  val offset : t -> [ `File of int64 | `Hierarchy of int64 ] option
+  (** Where the error is, when known. [`File o] is the offset of the offending block or field in the
+      file. [`Hierarchy o] is an offset into the decompressed hierarchy, which no file offset
+      corresponds to. [None] when no position applies, such as an I/O error. *)
 
   val message : t -> string
   val pp : Format.formatter -> t -> unit
@@ -83,7 +110,7 @@ val open_file : string -> (t, Error.t) result
 val of_string : string -> (t, Error.t) result
 
 val close : t -> unit
-(** Closes the file of {!open_file}. *)
+(** Closes the file of {!open_file}; see Lifetime above. *)
 
 val header : t -> Header.t
 
@@ -95,6 +122,8 @@ val geometry : t -> (int64 array, Error.t) result
     zero-length variables. *)
 
 val fold_hierarchy : t -> init:'a -> f:('a -> Hier.entry -> 'a) -> ('a, Error.t) result
+(** Folds over the hierarchy in declaration order. An alias to a handle that the hierarchy
+    does not declare is [Malformed]. *)
 
 type kind =
   | Bit  (** One bit: the sink's [bit]. *)
@@ -107,8 +136,9 @@ val signals : t -> ((kind * int) array, Error.t) result
 (** The kind and declared length of each variable that is not an alias, indexed by handle minus
     one: bits, 3n+2 for a port, 8 for a real, 0 for a string. Its length is the number of
     handles, and the sink's calls for a handle are those of its kind. The hierarchy is read on
-    the first call and the outcome, an error included, is kept: later calls return the very
-    same value. A real whose declared length is not 8 is [Malformed], here and so from
+    the first call and the outcome is kept for the life of the handle: later calls return the very
+    same value. An [Io] error is the exception: it is not kept, so a later call reads the
+    hierarchy again. A real whose declared length is not 8 is [Malformed], here and so from
     every function that reads values. *)
 
 type sink = {
@@ -124,6 +154,10 @@ type sink = {
 }
 (** Receives the value changes, in time order. Handles are 1-based and never aliases; bytes are
     only valid during the call and must not be modified. *)
+
+val ignore_sink : sink
+(** Ignores every call. Write [{ Fst.ignore_sink with bit = ... }] to receive some of them: the
+    code then compiles unchanged if [sink] gains a field. *)
 
 val iter_changes :
   ?select:(int -> bool) ->
@@ -141,7 +175,9 @@ val iter_changes :
     first, valid only during the call. Vectors with other values, the frame's vectors, reals and
     strings go to the sink as before.
 
-    An exception raised by the sink, [Exit] included, propagates to the caller. *)
+    A block with an inconsistent chain table or chain sizes is [Malformed], naming it by its
+    index among {!blocks}; libfst skips it silently. Likewise for {!step}, {!reader_at} and
+    {!Vcd}. An exception raised by the sink, [Exit] included, propagates to the caller. *)
 
 type reader
 (** The value changes of a file, read one value change block at a time, so that only that
@@ -162,7 +198,7 @@ val step : reader -> (bool, Error.t) result
     from [step]. [Ok false] when no block remains. After an error, or an exception raised by
     the sink (which propagates, as from {!iter_changes}), no block remains. Together, the steps make the same calls as {!iter_changes}. *)
 
-type block = { start_time : int64; end_time : int64; pos : int }
+type block = { start_time : int64; end_time : int64; pos : int64 }
 (** A value change block: the times in its header and its file offset. *)
 
 val blocks : t -> (block array, Error.t) result
@@ -177,8 +213,7 @@ val reader_at :
   sink ->
   block:int ->
   (reader, Error.t) result
-(** A {!reader} that starts at the [block]th of {!blocks} (0-based; an error if there is none).
-    [select] and [packed] are as in {!reader}.
+(** A {!reader} that starts at the [block]th of {!blocks} (0-based). [select] and [packed] are as in {!reader}.
 
     [block = 0] is {!reader}. For a later block, the first step first passes a frame: [frame]
     with the block's start time and every selected handle's value after all changes of the
@@ -186,13 +221,17 @@ val reader_at :
     (found by reading only those handles' chains in the earlier blocks), then the block's
     changes. [time] is called for the block's first time even when the previous block ended on
     it, so a timestamp that spans the boundary is seen in two parts: use {!aligned_block} to
-    start where none does. *)
+    start where none does. 
+
+    @raise Invalid_argument if there is no such block: a bad argument is a caller error, not bad input. *)
 
 val aligned_block : t -> int -> (int, Error.t) result
 (** [aligned_block t k] is the largest [j <= k] such that no time step has changes both in block
     [j] and in an earlier block (0 if there is none): a reader at [j] then sees whole time steps.
     The blocks' time tables decide it, except where a block's first time is the one an earlier
-    block ended on: those blocks are then decoded to see whether both have changes there. *)
+    block ended on: those blocks are then decoded to see whether both have changes there.
+
+    @raise Invalid_argument if [k] is not the index of a block, as for {!reader_at}. *)
 
 (** VCD output. *)
 module Vcd : sig

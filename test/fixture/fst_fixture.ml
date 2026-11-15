@@ -71,6 +71,7 @@ let set_chain_dest t ~block ~handle dest =
         mem_required = Some (Int64.of_int dest);
       })
 
+let set_mem_required t ~block m = set_block t block (fun b -> { b with mem_required = Some m })
 let set_chain_table t ~block s = set_block t block (fun b -> { b with chain_table = Some s })
 
 let set_trailer t ~block ~uclen ~clen ~nitems =

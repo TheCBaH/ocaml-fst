@@ -125,7 +125,7 @@ let () =
   in
   check "set_length" (List.mem (4, 4, false) (hier (F.set_length spec ~signal:4 4)));
   check "set_alias_target" (List.mem (1, 3, true) (hier (F.set_alias_target spec ~signal:6 3)));
-  let pos = (ok "blocks" (Fst.blocks t)).(1).pos in
+  let pos = Int64.to_int (ok "blocks" (Fst.blocks t)).(1).pos in
   let be64 s p = Int64.to_int (String.get_int64_be s p) in
   let patched = F.build (F.set_trailer spec ~block:1 ~uclen:7 ~clen:9 ~nitems:11) in
   check "set_trailer size" (String.length patched = String.length s);

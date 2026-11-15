@@ -61,15 +61,15 @@ let open_file path =
         raise e)
 
 let of_string s = Err.catch (fun () -> File.scan (File.of_string s))
-let close (t : t) = t.src.close ()
+let close = File.close
 let header (t : t) = t.header
 let blackouts (t : t) = Array.to_list t.blackouts
 let geometry t = Err.catch (fun () -> File.geometry t)
 
 let fold_hierarchy (t : t) ~init ~f =
   Err.catch (fun () ->
-      let base = match t.hier with Some b -> b.pos | None -> -1L in
-      H.fold ~base (File.hierarchy_data t) ~init ~f)
+      let data = File.hierarchy_data t in
+      H.fold ~handles:(H.count_handles data) data ~init ~f)
 
 type sink = Vc.sink = {
   time : int64 -> unit;
@@ -79,6 +79,8 @@ type sink = Vc.sink = {
   real : int -> float -> unit;
   varlen : int -> bytes -> int -> int -> unit;
 }
+
+let ignore_sink = Vc.ignore_sink
 
 type kind = H.kind = Bit | Vector | Port | Real | String
 
@@ -95,27 +97,30 @@ let reader ?select ?packed t sink =
 
 let step r = Err.catch (fun () -> Vc.step r)
 
-type block = { start_time : int64; end_time : int64; pos : int }
+type block = { start_time : int64; end_time : int64; pos : int64 }
 
 let blocks (t : t) =
   Err.catch (fun () ->
+      File.check_open t;
       Array.map
         (fun (b : File.block) ->
           let start_time, end_time = File.block_times t.src b in
-          { start_time; end_time; pos = Int64.to_int b.pos })
+          { start_time; end_time; pos = b.pos })
         t.vc_blocks)
 
 let check_block (t : t) k =
   if k < 0 || k >= Array.length t.vc_blocks then
-    Err.fail Err.Malformed (-1L) "block %d: the file has %d" k (Array.length t.vc_blocks)
+    invalid_arg (Printf.sprintf "Fst: block %d: the file has %d" k (Array.length t.vc_blocks))
 
 let reader_at ?select ?packed t sink ~block =
   Err.catch (fun () ->
+      File.check_open t;
       check_block t block;
       Vc.start_at ?select ?packed ~file:t ~signals:(tables t) ~sink ~block ())
 
 let aligned_block (t : t) k =
   Err.catch (fun () ->
+      File.check_open t;
       check_block t k;
       let bs = t.vc_blocks in
       let ends = Array.make (Array.length bs) None in
@@ -220,5 +225,5 @@ module Private = struct
     let table = Array.make (vc_maxhandle + 1) 0 and lengths = Array.make (vc_maxhandle + 1) 0 in
     match Vc.parse_chain (s ^ "\000") ~alias2 ~vc_maxhandle ~vc_len table lengths with
     | n -> Some (Array.sub table 0 n, Array.sub lengths 0 n)
-    | exception Vc.Skip_block -> None
+    | exception Vc.Bad_chain -> None
 end

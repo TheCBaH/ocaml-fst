@@ -15,6 +15,16 @@ type sink = {
   varlen : int -> bytes -> int -> int -> unit;
 }
 
+let ignore_sink =
+  {
+    time = ignore;
+    frame = ignore;
+    bit = (fun _ _ -> ());
+    vector = (fun _ _ _ _ -> ());
+    real = (fun _ _ -> ());
+    varlen = (fun _ _ _ _ -> ());
+  }
+
 (* What the traversal needs from the hierarchy: per handle (0-based), the declared length and
    whether it is a real. *)
 type signals = { lens : int array; reals : bool array }
@@ -31,9 +41,14 @@ let mask32 = if Sys.int_size > 32 then (1 lsl 32) - 1 else max_int
 let to_int32 v =
   if Sys.int_size > 32 then (v land mask32) - if v land (1 lsl 31) <> 0 then 1 lsl 32 else 0 else v
 
-(* A block is skipped when its chain table or traversal buffer is inconsistent, as libfst does
-   with [goto block_err]; other corruption is an error. *)
-exception Skip_block
+(* The time delta of a bit change: libfst's [shcnt = 2 << (vli & 1)]. ocamlformat drops the
+   parentheses of [vli lsr (2 lsl ...)], so the shift is named. *)
+let bit_delta vli =
+  let shcnt = 2 lsl (vli land 1) in
+  vli lsr shcnt
+
+(* A chain table that is inconsistent with its block; [block] turns it into [Malformed]. *)
+exception Bad_chain
 
 let varint_at b pos lim what off =
   let rec go acc shift p =
@@ -79,7 +94,7 @@ let parse_chain cm ~alias2 ~vc_maxhandle ~vc_len table lengths =
   let pnt = ref 0 and idx = ref 0 and pidx = ref 0 and pval = ref 0 and prev_alias = ref 0 in
   let room n = !idx + n <= vc_maxhandle in
   let positive v =
-    if not (room 1) then raise Skip_block;
+    if not (room 1) then raise Bad_chain;
     pval := !pval + v;
     table.(!idx) <- !pval;
     if !idx > 0 then lengths.(!pidx) <- !pval - table.(!pidx);
@@ -87,14 +102,14 @@ let parse_chain cm ~alias2 ~vc_maxhandle ~vc_len table lengths =
     incr idx
   in
   let zeros n =
-    if not (room n) then raise Skip_block;
+    if not (room n) then raise Bad_chain;
     for _ = 1 to n do
       table.(!idx) <- 0;
       incr idx
     done
   in
   let alias l =
-    if not (room 1) then raise Skip_block;
+    if not (room 1) then raise Bad_chain;
     table.(!idx) <- 0;
     lengths.(!idx) <- l;
     incr idx
@@ -121,9 +136,9 @@ let parse_chain cm ~alias2 ~vc_maxhandle ~vc_len table lengths =
     else begin
       let v, skip = varint32_str cm !pnt in
       if v = 0 then begin
-        if not (room 1) then raise Skip_block;
+        if not (room 1) then raise Bad_chain;
         pnt := !pnt + skip;
-        if !pnt >= clen then raise Skip_block;
+        if !pnt >= clen then raise Bad_chain;
         let v, skip = varint32_str cm !pnt in
         alias (to_int32 (-v));
         pnt := !pnt + skip
@@ -177,7 +192,8 @@ let scratch st n =
     st.scratch <- Bytes.create (max n (2 * Bytes.length st.scratch));
   st.scratch
 
-let block ~(file : File.t) ~signals ~mask ~packed ~recovered ~sink st ~first (b : File.block) =
+let block ~(file : File.t) ~signals ~mask ~packed ~recovered ~sink st ~index ~first (b : File.block)
+    =
   let selected i = match mask with None -> true | Some m -> Array.unsafe_get m i in
   let little_endian = file.header.little_endian in
   let maxhandle = Array.length signals.lens in
@@ -186,6 +202,7 @@ let block ~(file : File.t) ~signals ~mask ~packed ~recovered ~sink st ~first (b 
   let len = String.length data in
   let at p = Int64.add base (Int64.of_int p) in
   let what = "value change block" in
+  let bad fmt = Error.fail Malformed b.pos ("%s %d: " ^^ fmt) what index in
   let r = Bin_reader.create ~base ~pos:8 data in
   let beg_tim = Bin_reader.u64 r what in
   let _end_tim = Bin_reader.u64 r what in
@@ -244,7 +261,7 @@ let block ~(file : File.t) ~signals ~mask ~packed ~recovered ~sink st ~first (b 
   if
     Int64.compare chain_clen64 0L < 0
     || Int64.compare chain_clen64 (Int64.of_int (indx_pntr - vc_start)) > 0
-  then raise Skip_block;
+  then bad "chain table size";
   let chain_clen = Int64.to_int chain_clen64 in
   let indx_pos = indx_pntr - chain_clen in
   if vc_maxhandle > maxhandle then
@@ -255,9 +272,11 @@ let block ~(file : File.t) ~signals ~mask ~packed ~recovered ~sink st ~first (b 
   end;
   let cm = String.sub data indx_pos chain_clen ^ "\000" in
   let idx =
-    parse_chain cm
-      ~alias2:(b.typ = File.bl_vcdata_dyn_alias2)
-      ~vc_maxhandle ~vc_len:(indx_pos - vc_start) st.table st.lengths
+    try
+      parse_chain cm
+        ~alias2:(b.typ = File.bl_vcdata_dyn_alias2)
+        ~vc_maxhandle ~vc_len:(indx_pos - vc_start) st.table st.lengths
+    with Bad_chain -> bad "chain table"
   in
   let idx = min idx maxhandle in
   let mem_limit =
@@ -279,8 +298,8 @@ let block ~(file : File.t) ~signals ~mask ~packed ~recovered ~sink st ~first (b 
       let skip = vr.pos - p in
       let dpos = vr.pos in
       let dest, clen = if v <> 0 then (v, cl - skip) else (cl - skip, cl - skip) in
-      if v = 0 && cl <= skip then raise Skip_block;
-      if !need + dest > mem_limit then raise Skip_block;
+      if v = 0 && cl <= skip then bad "handle %d: chain shorter than its length" (i + 1);
+      if !need + dest > mem_limit then bad "handle %d: chains exceed the declared memory" (i + 1);
       need := !need + dest;
       if clen < 0 || dpos + clen > len then
         Error.fail Truncated (at dpos) "%s: handle %d" what (i + 1);
@@ -310,7 +329,7 @@ let block ~(file : File.t) ~signals ~mask ~packed ~recovered ~sink st ~first (b 
         st.remaining.(i) <- dest;
         toffs := !toffs + dest;
         let vli, _ = varint_at st.trav st.headptr.(i) (Bytes.length st.trav) w offset in
-        let tdelta = if signals.lens.(i) = 1 then vli lsr 2 lsl (vli land 1) else vli lsr 1 in
+        let tdelta = if signals.lens.(i) = 1 then bit_delta vli else vli lsr 1 in
         if tdelta >= tc_items then Error.fail Malformed offset "%s: time index %d" w tdelta;
         st.scatter.(i) <- tc_head.(tdelta);
         tc_head.(tdelta) <- i + 1
@@ -393,7 +412,7 @@ let block ~(file : File.t) ~signals ~mask ~packed ~recovered ~sink st ~first (b 
       st.scatter.(idx) <- 0;
       if st.remaining.(idx) > 0 then begin
         let vli, _ = varint_at trav st.headptr.(idx) tlim w off in
-        let tdelta = if shift1 then vli lsr 2 lsl (vli land 1) else vli lsr 1 in
+        let tdelta = if shift1 then bit_delta vli else vli lsr 1 in
         if tdelta + i >= tc_items then Error.fail Malformed off "%s: time index %d" w (tdelta + i);
         st.scatter.(idx) <- tc_head.(i + tdelta);
         tc_head.(i + tdelta) <- idx + 1
@@ -453,6 +472,7 @@ let start ?select ?packed ?(from = 0) ?stop ~(file : File.t) ~signals ~sink () =
 (* No block is pending while one is decoded, so that an exception, ours or the sink's, ends the
    iteration. *)
 let rec step r =
+  File.check_open r.file;
   (match r.select with
   | Some f ->
       r.mask <- Some (Array.init (Array.length r.signals.lens) (fun i -> f (i + 1)));
@@ -467,10 +487,8 @@ let rec step r =
   else begin
     let i = r.next in
     r.next <- r.stop;
-    (try
-       block ~file:r.file ~signals:r.signals ~mask:r.mask ~packed:r.packed ~recovered:r.recovered
-         ~sink:r.sink r.st ~first:(i = r.from) r.blocks.(i)
-     with Skip_block -> ());
+    block ~file:r.file ~signals:r.signals ~mask:r.mask ~packed:r.packed ~recovered:r.recovered
+      ~sink:r.sink r.st ~index:i ~first:(i = r.from) r.blocks.(i);
     r.recovered <- None;
     r.next <- i + 1;
     true
@@ -488,11 +506,7 @@ and strings_before r k =
     let last = Hashtbl.create 16 in
     let sink =
       {
-        time = ignore;
-        frame = ignore;
-        bit = (fun _ _ -> ());
-        vector = (fun _ _ _ _ -> ());
-        real = (fun _ _ -> ());
+        ignore_sink with
         varlen = (fun h b off len -> Hashtbl.replace last h (Bytes.sub_string b off len));
       }
     in

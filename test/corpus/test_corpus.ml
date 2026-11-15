@@ -322,15 +322,17 @@ let check_seek t (name, select) =
                 | Error e -> bad "aligned_block %d: %s" k (Fst.Error.to_string e)
                 | Ok j -> if j <> expected then bad "aligned_block %d = %d, want %d" k j expected
               done;
-              (match Fst.reader_at ~select t (tagged_sink (ref [])) ~block:nb with
-              | Ok _ -> bad "reader_at %d: no error" nb
-              | Error _ -> ());
-              (match Fst.reader_at ~select t (tagged_sink (ref [])) ~block:(-1) with
-              | Ok _ -> bad "reader_at -1: no error"
-              | Error _ -> ());
-              (match Fst.aligned_block t nb with
-              | Ok _ -> bad "aligned_block %d: no error" nb
-              | Error _ -> ());
+              let invalid what f =
+                match f () with
+                | exception Invalid_argument _ -> ()
+                | _ -> bad "%s: not Invalid_argument" what
+              in
+              invalid (Printf.sprintf "reader_at %d" nb) (fun () ->
+                  Fst.reader_at ~select t (tagged_sink (ref [])) ~block:nb);
+              invalid "reader_at -1" (fun () ->
+                  Fst.reader_at ~select t (tagged_sink (ref [])) ~block:(-1));
+              invalid (Printf.sprintf "aligned_block %d" nb) (fun () -> Fst.aligned_block t nb);
+              invalid "aligned_block -1" (fun () -> Fst.aligned_block t (-1));
               Result.map (fun () -> (!strings, !spans)) !result))
 
 (* The index reads a bounded number of bytes per block and none of the block's payload. *)

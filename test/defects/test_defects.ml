@@ -11,15 +11,7 @@ let check name ok =
     Printf.printf "FAIL %s\n%!" name
   end
 
-let sink =
-  {
-    Fst.time = ignore;
-    frame = ignore;
-    bit = (fun _ _ -> ());
-    vector = (fun _ _ _ _ -> ());
-    real = (fun _ _ -> ());
-    varlen = (fun _ _ _ _ -> ());
-  }
+let sink = Fst.ignore_sink
 
 (* [f] returns an [Error] of [kind]; [Ok] or an exception fails. *)
 let expect name kind f =
@@ -125,6 +117,177 @@ let () =
   at_block "clen beyond the block" (fun set -> set ~uclen:2 ~clen:100000 ~nitems:2);
   at_block "negative-sized clen" (fun set -> set ~uclen:2 ~clen:(-1) ~nitems:2);
   at_block "more items than bytes" (fun set -> set ~uclen:2 ~clen:2 ~nitems:3)
+
+(* N2 / D3: a block whose chains are inconsistent is an error naming the block, from every entry
+   point, and not silently skipped. *)
+let () =
+  let spec =
+    F.make
+      [ F.signal "a" F.Bit; F.signal "s" F.String ]
+      [
+        F.block ~times:[ 10L; 20L ] [ (0, 1, F.B '1'); (1, 2, F.S "x") ];
+        F.block ~times:[ 20L; 30L ] [ (0, 1, F.B '0'); (1, 2, F.S (String.make 100 'y')) ];
+        F.block ~times:[ 40L; 50L ] [ (0, 1, F.B '1') ];
+      ]
+  in
+  let t = open_ spec in
+  check "valid file" (Fst.iter_changes t sink = Ok ());
+  Fst.close t;
+  let named name f =
+    match f () with
+    | Error e ->
+        check (name ^ ": Malformed") (Fst.Error.kind e = Fst.Error.Malformed);
+        let m = Fst.Error.message e in
+        let rec has i = i + 7 <= String.length m && (String.sub m i 7 = "block 1" || has (i + 1)) in
+        check (name ^ ": names block 1: " ^ m) (has 0)
+    | Ok () -> check (name ^ ": Ok") false
+    | exception e -> check (name ^ ": raised " ^ Printexc.to_string e) false
+  in
+  let skipped name bad =
+    let t = open_ bad in
+    named (name ^ " iter_changes") (fun () -> Fst.iter_changes t sink);
+    named (name ^ " Vcd.to_string") (fun () -> Result.map ignore (Fst.Vcd.to_string t));
+    named (name ^ " reader/step") (fun () -> Result.bind (Fst.reader t sink) drain);
+    List.iter
+      (fun k ->
+        named (Printf.sprintf "%s reader_at %d" name k) (fun () ->
+            Result.bind (Fst.reader_at t sink ~block:k) drain))
+      [ 1; 2 ];
+    named (name ^ " aligned_block") (fun () -> Result.map ignore (Fst.aligned_block t 1));
+    Fst.close t
+  in
+  skipped "chains over the declared memory" (F.set_mem_required spec ~block:1 0L);
+  skipped "inconsistent chain table" (F.set_chain_table spec ~block:1 "\000")
+
+(* D7: an alias names a handle that exists. *)
+let () =
+  let spec =
+    F.make
+      [ F.signal "a" F.Bit; F.signal "v" (F.Vector 4); F.signal ~alias:1 "a2" F.Bit ]
+      [ F.block ~times:[ 10L ] [ (0, 1, F.B '1') ] ]
+  in
+  let fold t = Fst.fold_hierarchy t ~init:0 ~f:(fun n _ -> n + 1) in
+  let t = open_ spec in
+  check "valid alias" (Result.is_ok (fold t) && Result.is_ok (Fst.Vcd.to_string t));
+  Fst.close t;
+  List.iter
+    (fun target ->
+      let t = open_ (F.set_alias_target spec ~signal:3 target) in
+      let name = Printf.sprintf "alias to handle %d" target in
+      expect (name ^ " fold_hierarchy") Fst.Error.Malformed (fun () -> Result.map ignore (fold t));
+      expect (name ^ " Vcd.to_string") Fst.Error.Malformed (fun () ->
+          Result.map ignore (Fst.Vcd.to_string t));
+      check (name ^ ": values still read") (Fst.iter_changes t sink = Ok ());
+      Fst.close t)
+    [ 3; 4; 1000; 1 lsl 29 ]
+
+(* D7: a gzip and an LZ4 hierarchy block in one file. libfst keeps the last; here neither is
+   preferred. *)
+let () =
+  let spec = F.make [ F.signal "a" F.Bit ] [ F.block ~times:[ 10L ] [ (0, 1, F.B '1') ] ] in
+  let section typ =
+    let b = Bytes.make 17 '\000' in
+    Bytes.set b 0 (Char.chr typ);
+    Bytes.set_int64_be b 1 16L;
+    Bytes.to_string b
+  in
+  let t = open_ spec in
+  check "one hierarchy block" (Result.is_ok (Fst.Vcd.to_string t));
+  Fst.close t;
+  List.iter
+    (fun typ ->
+      match Fst.of_string (F.build spec ^ section typ) with
+      | Error e -> check ("open: " ^ Fst.Error.to_string e) false
+      | Ok t ->
+          let name = Printf.sprintf "gzip and type %d hierarchy" typ in
+          expect (name ^ " fold_hierarchy") Fst.Error.Unsupported (fun () ->
+              Result.map ignore (Fst.fold_hierarchy t ~init:() ~f:(fun () _ -> ())));
+          expect (name ^ " iter_changes") Fst.Error.Unsupported (fun () -> Fst.iter_changes t sink);
+          expect (name ^ " Vcd.to_string") Fst.Error.Unsupported (fun () ->
+              Result.map ignore (Fst.Vcd.to_string t));
+          Fst.close t)
+    [ 6; 7 ]
+
+(* D7: an error's offset says which coordinate system it is in. *)
+let () =
+  let spec =
+    F.make
+      [ F.signal "a" F.Bit; F.signal "v" (F.Vector 4); F.signal ~alias:1 "a2" F.Bit ]
+      [ F.block ~times:[ 10L; 20L ] [ (0, 1, F.B '1') ] ]
+  in
+  let offset name f ok =
+    match f () with
+    | Error e -> check (name ^ ": offset") (ok (Fst.Error.offset e))
+    | Ok _ -> check (name ^ ": Ok") false
+  in
+  let t = open_ (F.set_alias_target spec ~signal:3 9) in
+  offset "alias"
+    (fun () -> Fst.fold_hierarchy t ~init:() ~f:(fun () _ -> ()))
+    (fun o -> o = Some (`Hierarchy 19L));
+  Fst.close t;
+  let t = open_ (F.set_var_type (F.set_length spec ~signal:2 3) ~signal:2 3) in
+  offset "real length" (fun () -> Fst.signals t) (fun o -> o = Some (`Hierarchy 13L));
+  Fst.close t;
+  let t = open_ (F.set_trailer spec ~block:0 ~uclen:2 ~clen:100000 ~nitems:2) in
+  offset "trailer"
+    (fun () -> Fst.iter_changes t sink)
+    (function Some (`File _) -> true | _ -> false);
+  Fst.close t;
+  let t = open_ spec in
+  Fst.close t;
+  offset "closed" (fun () -> Fst.iter_changes t sink) (fun o -> o = None)
+
+(* D7: the length of a compressed wrapper is checked against the platform's int, not wrapped. *)
+let () =
+  let head =
+    let b = Bytes.make 17 '\000' in
+    Bytes.set b 0 '\xfe';
+    Bytes.set_int64_be b 1 100L;
+    Bytes.set_int64_be b 9 100L;
+    Bytes.to_string b
+  in
+  let wrapped length =
+    let read pos len =
+      let p = Int64.to_int pos in
+      if p >= String.length head then "" else String.sub head p (min len (String.length head - p))
+    in
+    Fst.Private.of_reader ~length ~read ()
+  in
+  let big =
+    (if Sys.int_size < 32 then [ 0x8000_0064L ] else []) @ [ Int64.add (Int64.of_int max_int) 100L ]
+  in
+  List.iter
+    (fun length ->
+      let name = Printf.sprintf "wrapper of %Ld bytes" length in
+      match wrapped length with
+      | Error e ->
+          let m = Fst.Error.message e in
+          let fits = ref false in
+          String.iteri
+            (fun i _ ->
+              if i + 7 <= String.length m && String.sub m i 7 = "fit in " then fits := true)
+            m;
+          check
+            (name ^ ": Limit_exceeded, does not fit: " ^ m)
+            (Fst.Error.kind e = Limit_exceeded && !fits)
+      | Ok _ -> check (name ^ ": Ok") false)
+    big
+
+(* D7: [ignore_sink] ignores everything, and a record update receives only what it overrides. *)
+let () =
+  let spec =
+    F.make
+      [ F.signal "a" F.Bit; F.signal "v" (F.Vector 4) ]
+      [ F.block ~times:[ 10L; 20L ] [ (0, 1, F.B '1'); (1, 2, F.V "1010"); (1, 1, F.B '0') ] ]
+  in
+  let t = open_ spec in
+  check "ignore_sink" (Fst.iter_changes t Fst.ignore_sink = Ok ());
+  let bits = ref 0 and vectors = ref 0 in
+  let counting =
+    { Fst.ignore_sink with bit = (fun _ _ -> incr bits); vector = (fun _ _ _ _ -> incr vectors) }
+  in
+  check "counting" (Fst.iter_changes t counting = Ok () && !bits = 2 && !vectors = 1);
+  Fst.close t
 
 (* D1: a sink's [Exit] reaches the caller. *)
 let () =

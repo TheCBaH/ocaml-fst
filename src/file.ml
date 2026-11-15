@@ -30,8 +30,10 @@ type t = {
   vc_blocks : block array;  (** The ones libfst iterates: before the first SKIP block. *)
   geometry : block option;
   hier : block option;
+  mixed_hier : bool;  (** Both a gzip and an LZ4 hierarchy block: libfst takes the last. *)
   blackouts : (int64 * bool) array;
   mutable signals : ((Hier.kind * int) array, Error.t) result option;
+  mutable closed : bool;
 }
 
 let of_string s =
@@ -79,7 +81,7 @@ let gunzip_file src =
   let seclen = Bin_reader.u64 r what in
   let uclen = Bin_reader.to_int r what (Bin_reader.u64 r what) in
   if Int64.equal seclen 0L then Error.fail Malformed 1L "%s: unfinished" what;
-  let rest = Int64.to_int (Int64.sub src.length 17L) in
+  let rest = Bin_reader.to_int r what (Int64.sub src.length 17L) in
   let data = read_exact src 0L (17 + rest) what in
   Codec.gzip ~what ~offset:17L data ~off:17 ~len:rest ~size:uclen
 
@@ -143,15 +145,16 @@ let index src =
   match !header with
   | None -> Error.fail Malformed 0L "no FST header"
   | Some header ->
-      let hier = match !hier_kinds with true, true -> None | _ -> !hier in
       {
         src;
         header;
         vc_blocks = Array.of_list (List.rev !vc);
         geometry = !geometry;
-        hier;
+        hier = !hier;
+        mixed_hier = !hier_kinds = (true, true);
         blackouts = !blackouts;
         signals = None;
+        closed = false;
       }
 
 (* Closes the underlying source once, however often it is called; later reads fail. *)
@@ -189,8 +192,16 @@ let scan src =
         src.close ();
         raise e)
 
+let closed_error = Error.make Io "file is closed"
+let check_open t = if t.closed then raise (Error.E closed_error)
+
+let close t =
+  t.closed <- true;
+  t.src.close ()
+
 (* Widths per handle: reals are 0, zero-length variables 0xFFFFFFFF. *)
 let geometry t =
+  check_open t;
   match t.geometry with
   | None -> [||]
   | Some b ->
@@ -212,6 +223,8 @@ let geometry t =
 
 let hierarchy_data t =
   let what = "hierarchy" in
+  check_open t;
+  if t.mixed_hier then Error.fail Unsupported (-1L) "gzip and LZ4 hierarchy blocks in one file";
   match t.hier with
   | None -> Error.fail Malformed (-1L) "no hierarchy block"
   | Some b ->
@@ -232,18 +245,15 @@ let hierarchy_data t =
         Codec.lz4 ~what ~offset:off mid ~off:0 ~len:uclen2 ~size:uclen
       end
 
-(* The variables' kinds and declared lengths, the one place a real's length is checked; the
-   outcome, an error included, is kept. *)
+(* The variables' kinds and declared lengths, the one place a real's length is checked. The
+   outcome is kept, a malformed hierarchy included, but not an I/O error, which may pass. *)
 let signals t =
   match t.signals with
+  | _ when t.closed -> Error closed_error
   | Some r -> r
   | None ->
-      let r =
-        Error.catch (fun () ->
-            let base = match t.hier with Some b -> b.pos | None -> -1L in
-            Hier.signals ~base (hierarchy_data t))
-      in
-      t.signals <- Some r;
+      let r = Error.catch (fun () -> Hier.signals (hierarchy_data t)) in
+      (match r with Error e when Error.kind e = Io -> () | _ -> t.signals <- Some r);
       r
 
 let signals_exn t = match signals t with Ok a -> a | Error e -> raise (Error.E e)
