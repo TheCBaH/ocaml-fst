@@ -1,6 +1,7 @@
 ARG VARIANT=13
 FROM debian:${VARIANT}
-# gcc and zlib build the libfst reference tool that writes the test corpus (test/reference).
+# gcc and zlib build the libfst reference tool that writes the test corpus (test/reference);
+# pkg-config is what opam's conf-zlib (a test dependency of fst) checks zlib with.
 # Verilator and g++ build the real-simulator fixture (make verilator-test); they are installed
 # for the 64-bit hosts only, where that test runs.
 RUN set -eux;\
@@ -16,6 +17,7 @@ RUN set -eux;\
   git\
   libc6-dev\
   make\
+  pkg-config\
   zlib1g-dev\
   $extra\
 ;\

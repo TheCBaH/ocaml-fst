@@ -1,3 +1,4 @@
+x-maintenance-intent: ["(latest)"]
 x-ai-disclosure: "ai-generated"
 x-ai-provider: "Anthropic, OpenAI"
 # zipc's zlib_decompress ~start fix (dbuenzli/zipc#10) is not released yet.

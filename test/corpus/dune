@@ -8,6 +8,8 @@
 
 (rule
  (alias runtest)
+ (enabled_if
+  (= %{read:../have_libfst} true))
  (deps
   %{project_root}/test/reference/corpus
   %{project_root}/test/reference/fst_ref_a2.exe)
@@ -19,6 +21,8 @@
 
 (rule
  (alias runtest)
+ (enabled_if
+  (= %{read:../have_libfst} true))
  (deps
   %{project_root}/test/reference/corpus
   (glob_files %{project_root}/vendor/libfst/tests/data/malformed/*.fst)
@@ -30,6 +34,8 @@
    %{project_root}/vendor/libfst/tests/data/malformed)))
 
 (rule
+ (enabled_if
+  (= %{read:../have_libfst} true))
  (deps %{project_root}/test/reference/corpus)
  (action
   (with-stdout-to
@@ -38,11 +44,15 @@
 
 (rule
  (alias runtest)
+ (enabled_if
+  (= %{read:../have_libfst} true))
  (action
   (diff corpus.digests corpus.digests.gen)))
 
 (rule
  (alias runtest)
+ (enabled_if
+  (= %{read:../have_libfst} true))
  (deps %{project_root}/test/reference/corpus)
  (action
   (run %{exe:test_events.exe} %{project_root}/test/reference/corpus)))

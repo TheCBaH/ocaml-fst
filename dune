@@ -2,3 +2,11 @@
 ; corpus (test/reference). It is never part of the library.
 
 (data_only_dirs vendor)
+
+; In the dev profile a documentation warning (an unresolved or ambiguous reference) fails
+; `dune build @doc`; a release build (opam -p) is not failed by a newer odoc's warnings.
+
+(env
+ (dev
+  (odoc
+   (warnings fatal))))

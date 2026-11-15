@@ -235,7 +235,7 @@ let block ~(file : File.t) ~signals ~mask ~packed ~recovered ~sink st ~index ~fi
   let beg_tim = Bin_reader.u64 r what in
   let _end_tim = Bin_reader.u64 r what in
   let mem_required = Bin_reader.u64 r what in
-  let { File.tpos; clen = tsec_clen; times = time_table } =
+  let { File.tpos = _; clen = tsec_clen; times = time_table } =
     File.time_table b ~read:(fun off n -> String.sub data off n)
   in
   let nitems = Array.length time_table in

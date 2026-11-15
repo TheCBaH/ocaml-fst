@@ -7,8 +7,9 @@ BENCH_DIR = _bench
 BENCH = _build/default/bench/bench.exe
 BENCH_CYCLES ?= 50000
 MIXED_CYCLES ?= 200000
+OCAML_VERSION ?= $(shell $(OPAM_EXEC) ocamlc -version)
 
-.PHONY: deps build test fmt fmt-check verilator-test corpus-digests ci clean bench bench-trace
+.PHONY: deps build test fmt fmt-check verilator-test corpus-digests ci release-test doc install-test clean bench bench-trace
 
 deps:
 	opam install . --deps-only --with-test -y
@@ -46,6 +47,31 @@ verilator-test:
 	rm -rf $(VERILATOR_DIR)
 
 ci: fmt-check build test
+
+# A source tarball has no vendor/libfst submodule: builds a `git archive HEAD` in a temporary
+# directory and runs @all @runtest there. The tests against the C reference (test/reference,
+# test/corpus, test/meta, test_fixture) are skipped; test_unit, test_io, test_defects and
+# test_cli run.
+release-test:
+	d=$$(mktemp -d /tmp/fst-release.XXXXXX) && git -c safe.directory='*' archive HEAD | tar -x -C "$$d" && \
+	  $(DUNE) build --root "$$d" @all @runtest; rc=$$?; \
+	  test $$rc -ne 0 || test ! -e "$$d/_build/default/test/reference/fst_ref_a2.exe" || rc=1; \
+	  rm -rf "$$d"; exit $$rc
+
+# odoc ({with-doc} in fst.opam): opam install . --deps-only --with-doc. Documentation warnings fail.
+doc:
+	$(DUNE) build @doc
+
+# `opam install` of a `git archive HEAD` in a new switch (a fresh compiler of the current version,
+# nothing else): dune, zipc and unlz4 come from opam and fst.opam's pin-depends, as for a user.
+# The tests that run are those release-test lists. Takes a few minutes.
+install-test:
+	d=$$(mktemp -d /tmp/fst-install.XXXXXX) && git -c safe.directory='*' archive HEAD | tar -x -C "$$d" && cd "$$d" && \
+	  opam switch create ./sw ocaml-base-compiler.$(OCAML_VERSION) --yes --no-install && \
+	  eval "$$(opam env --switch=./sw --set-switch)" && \
+	  opam install ./fst.opam --yes --with-test && \
+	  ocamlfind query fst && fst2vcd --help >/dev/null; rc=$$?; \
+	  cd /; opam switch remove "$$d/sw" --yes; rm -rf "$$d"; exit $$rc
 
 # Large Verilator traces (about 100 MB and 40 MB) for the benchmarks; needs Verilator.
 bench-trace:

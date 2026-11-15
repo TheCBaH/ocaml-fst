@@ -1,0 +1,12 @@
+; true when the vendor/libfst submodule is checked out: the tests that compare with the C reference
+; are enabled only then, so that a source tarball (without the submodule) still builds and runs
+; the other tests.
+
+(rule
+ (target have_libfst)
+ (deps
+  (glob_files %{project_root}/vendor/libfst/src/fstapi.c))
+ (action
+  (with-stdout-to
+   %{target}
+   (system "if [ -n '%{deps}' ]; then printf true; else printf false; fi"))))
