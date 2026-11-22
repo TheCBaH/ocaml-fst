@@ -1,4 +1,5 @@
 (library
  (name fst)
  (public_name fst)
+ (private_modules bin_reader codec error fastlz file header hier vc vcd)
  (libraries zipc unlz4))
