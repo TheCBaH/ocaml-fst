@@ -64,13 +64,18 @@ doc:
 
 # `opam install` of a `git archive HEAD` in a new switch (a fresh compiler of the current version,
 # nothing else): dune, zipc and unlz4 come from opam and fst.opam's pin-depends, as for a user.
-# The tests that run are those release-test lists. Takes a few minutes.
+# The tests that run are those release-test lists. It also checks the unlz4 pin and the installed
+# module namespace (scripts/namespace-check.sh). Takes a few minutes.
 install-test:
 	d=$$(mktemp -d /tmp/fst-install.XXXXXX) && git -c safe.directory='*' archive HEAD | tar -x -C "$$d" && cd "$$d" && \
 	  opam switch create ./sw ocaml-base-compiler.$(OCAML_VERSION) --yes --no-install && \
 	  eval "$$(opam env --switch=./sw --set-switch)" && \
 	  opam install ./fst.opam --yes --with-test && \
-	  ocamlfind query fst && fst2vcd --help >/dev/null; rc=$$?; \
+	  ocamlfind query fst && fst2vcd --help >/dev/null && \
+	  opam list --installed --columns=name,pin unlz4 zipc && \
+	  opam list --installed --columns=name,pin unlz4 | grep -q "$$(sed -n 's/.*unlz4\.git#\(.......\).*/\1/p' fst.opam)" && \
+	  sh scripts/namespace-check.sh --fail --prefix Fst --expect-libs scripts/namespace.expect \
+	    "install=$$(opam var lib)/fst"; rc=$$?; \
 	  cd /; opam switch remove "$$d/sw" --yes; rm -rf "$$d"; exit $$rc
 
 # Large Verilator traces (about 100 MB and 40 MB) for the benchmarks; needs Verilator.
