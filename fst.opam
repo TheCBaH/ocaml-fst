@@ -38,5 +38,5 @@ x-ai-provider: "Anthropic, OpenAI"
 # zipc's zlib_decompress ~start fix (dbuenzli/zipc#10) is not released yet.
 pin-depends: [
   ["zipc.dev" "git+https://github.com/dbuenzli/zipc.git#076e6168a222dfe46b7ba598dc87a9a2e58b2569"]
-  ["unlz4.dev" "git+https://github.com/TheCBaH/ocaml-unlz4.git"]
+  ["unlz4.dev" "git+https://github.com/TheCBaH/ocaml-unlz4.git#1b79f18cb5c7c76cb2e29a329017d78884423feb"]
 ]

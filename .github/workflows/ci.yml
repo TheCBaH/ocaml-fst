@@ -71,7 +71,7 @@ jobs:
         echo 'EXEC=${{ steps.devcontainer.outputs.exec }}' >> $GITHUB_ENV
     - name: versions
       run: |
-        ${{ env.EXEC }} sh -c 'opam exec -- ocamlfind ocamlopt -version; opam exec -- dune --version; opam list --columns=name,version dune zipc unlz4 ocamlformat 2>/dev/null; verilator --version 2>/dev/null || true'
+        ${{ env.EXEC }} sh -c 'opam exec -- ocamlfind ocamlopt -version; opam exec -- dune --version; opam list --columns=name,version,pin dune zipc unlz4 ocamlformat 2>/dev/null; verilator --version 2>/dev/null || true'
     - name: ci
       run: |
         ${{ env.EXEC }} make ci
